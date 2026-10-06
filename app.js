@@ -5,22 +5,21 @@
    クラウド同期を入れるときは、この Store を差し替える。
    ========================================================= */
 const Store = (() => {
-  let dbp = null;
+  let dbp = null, db = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
     const r = indexedDB.open('canvas-note', 1);
     r.onupgradeneeded = () => r.result.createObjectStore('boards', { keyPath: 'id' });
-    r.onsuccess = () => res(r.result);
+    r.onsuccess = () => res(db = r.result);
     r.onerror = () => rej(r.error);
   }));
-  const run = async (mode, fn) => {
-    const db = await open();
-    return new Promise((res, rej) => {
-      const tx = db.transaction('boards', mode);
-      const req = fn(tx.objectStore('boards'));
-      tx.oncomplete = () => res(req && req.result);
-      tx.onerror = () => rej(tx.error);
-    });
-  };
+  const tx = (d, mode, fn) => new Promise((res, rej) => {
+    const t = d.transaction('boards', mode);
+    const req = fn(t.objectStore('boards'));
+    t.oncomplete = () => res(req && req.result);
+    t.onerror = () => rej(t.error);
+  });
+  // 開いていればその場で書き込みを始める（ページを閉じる直前でも間に合うように、await を挟まない）
+  const run = (mode, fn) => (db ? tx(db, mode, fn) : open().then(d => tx(d, mode, fn)));
   return {
     all: () => run('readonly', s => s.getAll()),
     put: b => run('readwrite', s => s.put(b)),
@@ -368,7 +367,7 @@ let saveTimer = 0;
 function changed() {
   if (S.board) S.board.updatedAt = Date.now();
   updateHistoryButtons();
-  scheduleSave();
+  saveNow(); // 描いた・消したなどはすぐ保存（表示位置の変更だけは scheduleSave で少し待つ）
   window.Sync?.changed();
   render();
 }
@@ -381,7 +380,21 @@ function saveNow() {
   if (!S.board) return;
   S.board.strokes = S.strokes;
   S.board.view = { ...S.view };
-  Store.put(S.board).catch(err => toast('保存に失敗しました: ' + err.message));
+  persistBoard(S.board);
+}
+// 書き込みは1つずつ。書き込み中に来たものは、終わってからまとめて書く
+let saving = null;
+const pendingBoards = new Set();
+function persistBoard(b) {
+  if (saving) { pendingBoards.add(b); return; }
+  saving = Store.put(b)
+    .catch(err => toast('保存に失敗しました: ' + err.message))
+    .finally(() => {
+      saving = null;
+      const next = [...pendingBoards];
+      pendingBoards.clear();
+      next.forEach(persistBoard);
+    });
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
 window.addEventListener('pagehide', saveNow);
@@ -738,7 +751,7 @@ function onDown(e) {
     case 'pen': case 'hl': {
       S.sel = null;
       const cfg = S.tool === 'hl' ? S.hl : S.pen;
-      const st = { id: uid(), t: S.tool, c: cfg.color, w: cfg.width, pr: S.tool === 'pen' && e.pointerType === 'pen', p: [] };
+      const st = { id: uid(), t: S.tool, c: cfg.color, w: cfg.width, pr: S.tool === 'pen' && e.pointerType === 'pen' && S.pen.pressure !== false, p: [] };
       act = { type: 'draw', pid: e.pointerId, st, snap: S.ruler.on ? rulerSnapSide(x, y) : 0, curve: curveSnapStart(x, y) };
       S.cur = st;
       addPoint(e);
@@ -991,7 +1004,12 @@ function renderOptions() {
       + widths.map(w => {
         const d = Math.round(4 + (w / maxW) * 14);
         return `<button class="wd ${w === cfg.width ? 'active' : ''}" data-width="${w}" title="太さ ${w}"><i style="width:${d}px;height:${d}px"></i></button>`;
-      }).join('');
+      }).join('')
+      + (t === 'pen'
+        ? `<span class="sep"></span><button class="toggle ${S.pen.pressure !== false ? 'active' : ''}" id="pen-pr" title="ペン（Surface ペン、Apple Pencil など）の筆圧で太さを変える">筆圧 ${S.pen.pressure !== false ? 'オン' : 'オフ'}</button>`
+        : '');
+    const pr = box.querySelector('#pen-pr');
+    if (pr) pr.onclick = () => { S.pen.pressure = S.pen.pressure === false; saveToolPrefs(); renderOptions(); };
     box.querySelectorAll('[data-color]').forEach(b => b.onclick = () => { cfg.color = b.dataset.color; saveToolPrefs(); renderOptions(); });
     box.querySelector('input[type=color]').oninput = e => { cfg.color = e.target.value; saveToolPrefs(); };
     box.querySelector('input[type=color]').onchange = () => renderOptions();
@@ -1367,7 +1385,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=9').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=10').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
