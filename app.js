@@ -256,14 +256,15 @@ function renderMain() {
   const r = viewRect();
   drawBg(c, r, v.s, S.board.bg);
   c.lineCap = 'round'; c.lineJoin = 'round';
-  const sel = S.sel, moving = sel && (sel.dx || sel.dy);
+  const sel = S.sel, moving = sel && (sel.dx || sel.dy || sel.preview);
   for (const st of S.strokes) {
     if (moving && sel.set.has(st)) continue;
     const b = bbox(st);
     if (b.x1 < r.x0 || b.x0 > r.x1 || b.y1 < r.y0 || b.y0 > r.y1) continue;
     drawStroke(c, st);
   }
-  if (moving) {
+  if (moving && sel.preview) for (const st of sel.preview) drawStroke(c, st);
+  else if (moving) {
     c.translate(sel.dx, sel.dy);
     for (const st of sel.set) drawStroke(c, st);
   }
@@ -298,12 +299,23 @@ function renderOver() {
   // 選択範囲
   const sb = $('#selbar');
   if (S.sel) {
-    const bb = S.sel.bb;
-    const a = toScreen(bb.x0 + S.sel.dx, bb.y0 + S.sel.dy), b = toScreen(bb.x1 + S.sel.dx, bb.y1 + S.sel.dy);
+    const bb = selDisplayBB();
+    const a = toScreen(bb.x0, bb.y0), b = toScreen(bb.x1, bb.y1);
     c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = T.accent;
     c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
     c.setLineDash([]);
-    if (act && act.type === 'move') sb.hidden = true;
+    const busy = act && (act.type === 'move' || act.type === 'scale');
+    // 拡大縮小のつまみ
+    if (!act || act.type !== 'move') {
+      const rr = { x0: a.x - 6, y0: a.y - 6, x1: b.x + 6, y1: b.y + 6 };
+      for (const h of HANDLES) {
+        if ((!h.cx && rr.x1 - rr.x0 < 60) || (!h.cy && rr.y1 - rr.y0 < 60)) continue;
+        const p = handlePos(h, rr);
+        c.fillStyle = T.paper; c.strokeStyle = T.accent; c.lineWidth = 1.5;
+        c.beginPath(); c.rect(p.x - 5, p.y - 5, 10, 10); c.fill(); c.stroke();
+      }
+    }
+    if (busy) sb.hidden = true;
     else {
       sb.hidden = false;
       const bw = sb.offsetWidth, bh = sb.offsetHeight;
@@ -495,6 +507,82 @@ function setSelection(set) {
   renderSelColors();
   renderOverSoon();
 }
+/* ---------- 選択範囲の拡大縮小（点の位置だけ変えるので線の太さはそのまま） ----------
+   四隅：縦横比を保つ（Shift を押しながらだと自由）、辺の中央：横だけ／縦だけ */
+const HANDLES = [
+  { cx: -1, cy: -1, cur: 'nwse-resize' }, { cx: 1, cy: -1, cur: 'nesw-resize' },
+  { cx: -1, cy: 1, cur: 'nesw-resize' }, { cx: 1, cy: 1, cur: 'nwse-resize' },
+  { cx: 0, cy: -1, cur: 'ns-resize' }, { cx: 0, cy: 1, cur: 'ns-resize' },
+  { cx: -1, cy: 0, cur: 'ew-resize' }, { cx: 1, cy: 0, cur: 'ew-resize' },
+];
+function selScreenRect() {
+  const bb = S.sel.bb, a = toScreen(bb.x0, bb.y0), b = toScreen(bb.x1, bb.y1);
+  return { x0: a.x - 6, y0: a.y - 6, x1: b.x + 6, y1: b.y + 6 };
+}
+function handlePos(h, r) {
+  return { x: h.cx < 0 ? r.x0 : h.cx > 0 ? r.x1 : (r.x0 + r.x1) / 2, y: h.cy < 0 ? r.y0 : h.cy > 0 ? r.y1 : (r.y0 + r.y1) / 2 };
+}
+function handleAt(x, y, pointerType) {
+  if (!S.sel) return null;
+  const r = selScreenRect(), rad = pointerType === 'touch' ? 22 : 12;
+  // 小さい選択では辺の中央のつまみが四隅と重なるので、四隅を優先
+  for (const h of HANDLES) {
+    if (!h.cx || !h.cy) { if (r.x1 - r.x0 < 60 && !h.cx) continue; if (r.y1 - r.y0 < 60 && !h.cy) continue; }
+    const p = handlePos(h, r);
+    if (Math.abs(x - p.x) <= rad && Math.abs(y - p.y) <= rad) return h;
+  }
+  return null;
+}
+function scaleStroke(st, ax, ay, sx, sy) {
+  const p = st.p.slice();
+  for (let i = 0; i < p.length; i += 3) { p[i] = ax + (p[i] - ax) * sx; p[i + 1] = ay + (p[i + 1] - ay) * sy; }
+  return { ...st, p };
+}
+function startScale(h, pid, x, y) {
+  // 線の太さの分の余白を含まない、点の範囲を基準にする（拡大縮小しても位置がずれない）
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const st of S.sel.set) for (let i = 0; i < st.p.length; i += 3) {
+    x0 = Math.min(x0, st.p[i]); x1 = Math.max(x1, st.p[i]); y0 = Math.min(y0, st.p[i + 1]); y1 = Math.max(y1, st.p[i + 1]);
+  }
+  if (x1 - x0 < 1e-6) x1 = x0 + 1e-6;
+  if (y1 - y0 < 1e-6) y1 = y0 + 1e-6;
+  act = {
+    type: 'scale', pid, h, w0: toWorld(x, y),
+    ax: h.cx < 0 ? x1 : x0, ay: h.cy < 0 ? y1 : y0,   // 反対側を固定
+    hx: h.cx < 0 ? x0 : x1, hy: h.cy < 0 ? y0 : y1,   // つまみ側
+  };
+}
+function updateScale(e) {
+  const w = toWorld(e.clientX, e.clientY), a = act;
+  const MIN = 0.02;
+  // つまみ側の点を、指（マウス）が動いた分だけ動かしたときの倍率
+  const tx = a.hx + (w.x - a.w0.x), ty = a.hy + (w.y - a.w0.y);
+  let sx = 1, sy = 1;
+  if (a.h.cx && a.h.cy && !e.shiftKey) {
+    const vx = a.hx - a.ax, vy = a.hy - a.ay;
+    sx = sy = Math.max(MIN, ((tx - a.ax) * vx + (ty - a.ay) * vy) / (vx * vx + vy * vy));
+  } else {
+    if (a.h.cx) sx = Math.max(MIN, (tx - a.ax) / (a.hx - a.ax));
+    if (a.h.cy) sy = Math.max(MIN, (ty - a.ay) / (a.hy - a.ay));
+  }
+  S.sel.tf = { ax: a.ax, ay: a.ay, sx, sy };
+  S.sel.preview = [...S.sel.set].map(st => scaleStroke(st, a.ax, a.ay, sx, sy));
+  render();
+}
+function commitScale() {
+  const tf = S.sel.tf;
+  S.sel.tf = null; S.sel.preview = null;
+  if (!tf || (tf.sx === 1 && tf.sy === 1)) { render(); return; }
+  mapSelection(st => scaleStroke(st, tf.ax, tf.ay, tf.sx, tf.sy));
+}
+// 表示用：拡大縮小・移動中の選択範囲（ワールド座標）
+function selDisplayBB() {
+  const { bb, dx, dy, tf } = S.sel;
+  if (!tf) return { x0: bb.x0 + dx, y0: bb.y0 + dy, x1: bb.x1 + dx, y1: bb.y1 + dy };
+  const X = v => tf.ax + (v - tf.ax) * tf.sx, Y = v => tf.ay + (v - tf.ay) * tf.sy;
+  return { x0: Math.min(X(bb.x0), X(bb.x1)), y0: Math.min(Y(bb.y0), Y(bb.y1)), x1: Math.max(X(bb.x0), X(bb.x1)), y1: Math.max(Y(bb.y0), Y(bb.y1)) };
+}
+
 function inSelection(x, y) {
   if (!S.sel) return false;
   const a = toScreen(S.sel.bb.x0, S.sel.bb.y0), b = toScreen(S.sel.bb.x1, S.sel.bb.y1);
@@ -599,6 +687,7 @@ function cancelAction() {
   if (act.type === 'erase' && act.changed) S.strokes = act.before;
   if (act.type === 'lasso') S.lasso = null;
   if (act.type === 'move') { S.sel.dx = S.sel.dy = 0; }
+  if (act.type === 'scale' && S.sel) { S.sel.tf = null; S.sel.preview = null; }
   act = null;
   render();
 }
@@ -663,8 +752,10 @@ function onDown(e) {
       eraseTo(x, y);
       renderOverSoon();
       break;
-    case 'lasso':
-      if (inSelection(x, y)) {
+    case 'lasso': {
+      const h = handleAt(x, y, e.pointerType);
+      if (h) startScale(h, e.pointerId, x, y);
+      else if (inSelection(x, y)) {
         const w = toWorld(x, y);
         act = { type: 'move', pid: e.pointerId, sx: w.x, sy: w.y };
       } else {
@@ -674,6 +765,7 @@ function onDown(e) {
       }
       renderOverSoon();
       break;
+    }
   }
 }
 
@@ -696,7 +788,11 @@ function onMove(e) {
   if (e.pointerType !== 'touch') {
     hover = { x: e.clientX, y: e.clientY };
     if (S.tool === 'eraser') renderOverSoon();
-    if (!act && S.tool === 'lasso') over.classList.toggle('c-move', inSelection(e.clientX, e.clientY));
+    if (!act && S.tool === 'lasso') {
+      const h = handleAt(e.clientX, e.clientY, e.pointerType);
+      over.style.cursor = h ? h.cur : '';
+      over.classList.toggle('c-move', !h && inSelection(e.clientX, e.clientY));
+    }
   }
   const pt = ptrs.get(e.pointerId);
   if (!pt) return;
@@ -728,6 +824,7 @@ function onMove(e) {
       render();
       break;
     }
+    case 'scale': updateScale(e); break;
     case 'pan':
       S.view = { ...S.view, x: S.view.x + dx, y: S.view.y + dy };
       viewChanged();
@@ -780,6 +877,7 @@ function onUp(e) {
       break;
     }
     case 'move': commitMove(); break;
+    case 'scale': commitScale(); break;
   }
   setCursor();
   render();
@@ -836,6 +934,7 @@ document.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false
 
 function setCursor() {
   over.className = '';
+  over.style.cursor = '';
   if (act && act.type === 'pan') over.classList.add('c-grabbing');
   else if (spaceDown || S.tool === 'hand') over.classList.add('c-grab');
   else if (S.tool === 'eraser') over.classList.add('c-none');
@@ -1268,7 +1367,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=7').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=8').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
