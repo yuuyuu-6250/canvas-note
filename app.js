@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 /* =========================================================
    保存（IndexedDB）
@@ -520,6 +520,7 @@ function updatePinch() {
   if (act.type === 'ruler-pinch') {
     S.ruler.wx = act.r0.wx + (m.x - act.m0.x) / S.view.s;
     S.ruler.wy = act.r0.wy + (m.y - act.m0.y) / S.view.s;
+    S.ruler.a = act.r0.a; // 回す前の向きに戻してから、中心を軸に回す
     setRulerAngle(act.r0.a + Math.atan2(b.y - a.y, b.x - a.x) - act.ang0);
     renderOverSoon();
     return;
@@ -746,7 +747,7 @@ over.addEventListener('wheel', e => {
   const dx = e.deltaX * k, dy = e.deltaY * k;
   if (S.ruler.on && !e.ctrlKey && rulerHit(e.clientX, e.clientY)) {
     const step = (e.shiftKey ? 15 : 1) * Math.PI / 180;
-    S.ruler.a += Math.sign(dy || dx) * step;
+    setRulerAngle(S.ruler.a + Math.sign(dy || dx) * step, false);
     renderOverSoon();
     return;
   }
@@ -1193,7 +1194,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=5').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=6').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 

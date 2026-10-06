@@ -11,9 +11,23 @@ const CURVE_SNAP = 30;                // カーブからこの距離（画面px�
 const GRID_SNAP = 10;                 // 原点を方眼の交点に吸着させる距離（画面px）
 const FN_EXAMPLES = ['x^2', 'x^3-3x', '2x^2-4x+1', 'sqrt(x)', '1/x', 'log(x)', 'ln(x)', '2^x', 'sin(x)', 'abs(x)'];
 
-/* ---------- 座標 ---------- */
-const rulerOrigin = () => toScreen(S.ruler.wx, S.ruler.wy);
+/* ---------- 座標 ----------
+   関数定規：(wx, wy) = 原点
+   直線定規：(wx, wy) = 上の縁の上の点。定規の幅は画面pxで一定なので、
+             縁をキャンバスに固定しておけば、ズームしても縁は方眼の線からずれない */
 const gridStep = () => (S.board && S.board.bg && S.board.bg.type !== 'none' ? S.board.bg.size : 0);
+function rulerOrigin() {
+  const R = S.ruler, p = toScreen(R.wx, R.wy);
+  if (R.type !== 'line') return p;
+  const hw = RULER_W / 2; // 中心 = 上の縁から hw だけ内側
+  return { x: p.x - hw * Math.sin(R.a), y: p.y + hw * Math.cos(R.a) };
+}
+// 画面上の中心 (cx, cy) に定規を置く
+function setRulerCenter(cx, cy) {
+  const R = S.ruler, hw = R.type === 'line' ? RULER_W / 2 : 0;
+  const w = toWorld(cx + hw * Math.sin(R.a), cy - hw * Math.cos(R.a));
+  R.wx = w.x; R.wy = w.y;
+}
 
 function rulerLocal(x, y) {
   const o = rulerOrigin(), a = S.ruler.a, dx = x - o.x, dy = y - o.y, co = Math.cos(a), si = Math.sin(a);
@@ -23,18 +37,32 @@ function rulerToScreen(lx, ly) {
   const o = rulerOrigin(), a = S.ruler.a, co = Math.cos(a), si = Math.sin(a);
   return { x: o.x + lx * co - ly * si, y: o.y + lx * si + ly * co };
 }
+// 方眼に吸着させながら動かす
 function moveRulerTo(wx, wy) {
-  const g = gridStep();
-  if (S.ruler.type === 'fn' && g) {
-    const sx = Math.round(wx / g) * g, sy = Math.round(wy / g) * g;
+  const g = gridStep(), R = S.ruler, near = v => Math.round(v / g) * g;
+  if (g && R.type === 'fn') {
+    // 原点を方眼の交点に
+    const sx = near(wx), sy = near(wy);
     if (Math.hypot(sx - wx, sy - wy) * S.view.s <= GRID_SNAP) { wx = sx; wy = sy; }
+  } else if (g && R.type === 'line') {
+    // 縁を方眼の線に（0° / 90° / 180° / 270° のとき）
+    const q = R.a / (Math.PI / 2), k = Math.round(q);
+    if (Math.abs(q - k) < 1e-6) {
+      if (k % 2 === 0) { if (Math.abs(near(wy) - wy) * S.view.s <= GRID_SNAP) wy = near(wy); }
+      else if (Math.abs(near(wx) - wx) * S.view.s <= GRID_SNAP) wx = near(wx);
+    }
   }
-  S.ruler.wx = wx; S.ruler.wy = wy;
+  R.wx = wx; R.wy = wy;
 }
-function setRulerAngle(a) {
-  const step = Math.PI / 12, near = Math.round(a / step) * step; // 15° ごとに吸着
-  if (Math.abs(a - near) < 0.025) a = near;
+// 中心を軸に回す。snap = 15° ごとに吸着
+function setRulerAngle(a, snap = true) {
+  if (snap) {
+    const step = Math.PI / 12, near = Math.round(a / step) * step;
+    if (Math.abs(a - near) < 0.025) a = near;
+  }
+  const c = rulerOrigin();
   S.ruler.a = a;
+  setRulerCenter(c.x, c.y);
 }
 function rulerDeg() {
   const m = S.ruler.type === 'line' ? 180 : 360; // 直線は 180° 回すと同じ形
@@ -62,14 +90,15 @@ function rulerSnapSide(x, y) {
   const d = Math.abs(rulerLocal(x, y).ly);
   return d > RULER_W / 2 && d <= RULER_W / 2 + RULER_SNAP ? Math.sign(rulerLocal(x, y).ly) : 0;
 }
-function rulerProject(x, y, side, lineW) {
-  return rulerToScreen(rulerLocal(x, y).lx, side * (RULER_W / 2 + lineW / 2 + 0.5));
+// 線の中心を縁の線にぴったり乗せる（縁を方眼に合わせれば、線も方眼の線に乗る）
+function rulerProject(x, y, side) {
+  return rulerToScreen(rulerLocal(x, y).lx, side * RULER_W / 2);
 }
 
 /* =========================================================
    式の読み取り（eval は使わない）
    使えるもの：+ - * / ^ ( )、2x のような掛け算の省略、
-   sqrt √ cbrt abs sin cos tan asin acos atan exp ln log(=log10) log2 log_b(x)、pi π e
+   sqrt √ cbrt abs |…| sin cos tan asin acos atan exp ln log(=log10) log2 log_b(x)、pi π e
    ========================================================= */
 const FN = {
   sqrt: Math.sqrt, cbrt: Math.cbrt, abs: Math.abs, sin: Math.sin, cos: Math.cos, tan: Math.tan,
@@ -82,7 +111,7 @@ const NAMES = [...Object.keys(FN), ...Object.keys(CONST), 'x'].sort((a, b) => b.
 function normalizeExpr(s) {
   return String(s).toLowerCase().replace(/\s+/g, '').replace(/^y=/, '')
     .replace(/[−–]/g, '-').replace(/[×·]/g, '*').replace(/÷/g, '/')
-    .replace(/π/g, 'pi').replace(/√/g, 'sqrt').replace(/²/g, '^2').replace(/³/g, '^3');
+    .replace(/π/g, 'pi').replace(/√/g, 'sqrt').replace(/²/g, '^2').replace(/³/g, '^3').replace(/｜/g, '|');
 }
 function tokenize(s) {
   const t = [];
@@ -100,7 +129,7 @@ function tokenize(s) {
       if (!name) throw new Error(`「${s.slice(i).match(/^[a-z]+/)[0]}」は使えません`);
       t.push({ k: 'id', v: name }); i += name.length; continue;
     }
-    if ('+-*/^()_'.includes(c)) { t.push({ k: c }); i++; continue; }
+    if ('+-*/^()_|'.includes(c)) { t.push({ k: c }); i++; continue; }
     throw new Error(`「${c}」は使えません`);
   }
   return t;
@@ -109,11 +138,14 @@ function compileExpr(src) {
   const s = normalizeExpr(src);
   if (!s) throw new Error('式を入れてください');
   const t = tokenize(s);
-  let p = 0;
+  let p = 0, absDepth = 0; // |…| の中では次の | は閉じかっこ
   const peek = () => t[p], next = () => t[p++];
   const is = k => t[p] && t[p].k === k;
-  const expect = k => { if (!is(k)) throw new Error(k === ')' ? '「)」が足りません' : '式が正しくありません'); p++; };
-  const startsPrimary = tk => tk && (tk.k === 'num' || tk.k === 'id' || tk.k === '(');
+  const expect = k => {
+    if (!is(k)) throw new Error(k === ')' ? '「)」が足りません' : k === '|' ? '「|」が足りません' : '式が正しくありません');
+    p++;
+  };
+  const startsPrimary = tk => tk && (tk.k === 'num' || tk.k === 'id' || tk.k === '(' || (tk.k === '|' && !absDepth));
 
   function expr() {
     let a = term();
@@ -158,6 +190,13 @@ function compileExpr(src) {
     if (!tk) throw new Error('式が途中で終わっています');
     if (tk.k === 'num') { const v = tk.v; return () => v; }
     if (tk.k === '(') { const a = expr(); expect(')'); return a; }
+    if (tk.k === '|' && !absDepth) {
+      absDepth++;
+      const a = expr();
+      expect('|');
+      absDepth--;
+      return x => Math.abs(a(x));
+    }
     if (tk.k === 'id') {
       if (tk.v === 'x') return x => x;
       if (tk.v in CONST) { const v = CONST[tk.v]; return () => v; }
@@ -392,16 +431,23 @@ function toggleRuler() {
   const R = S.ruler;
   R.on = !R.on;
   if (R.on) {
-    // 画面の中央に置く。方眼があれば原点を交点に、1目盛を1マスに合わせる
-    const c = toWorld(W / 2, H / 2), g = gridStep();
-    R.wx = g ? Math.round(c.x / g) * g : c.x;
-    R.wy = g ? Math.round(c.y / g) * g : c.y;
+    // 画面の中央に置く。方眼があれば原点（直線なら上の縁）を方眼に、1目盛を1マスに合わせる
     R.a = 0;
+    placeRulerAtCenter();
+    const g = gridStep();
     if (g) R.unit = g;
   }
   $('#btn-ruler').classList.toggle('active', R.on);
   renderRulerOpts();
   renderOverSoon();
+}
+function placeRulerAtCenter() {
+  const g = gridStep(), R = S.ruler;
+  setRulerCenter(W / 2, H / 2);
+  if (g) {
+    R.wy = Math.round(R.wy / g) * g;
+    if (R.type === 'fn') R.wx = Math.round(R.wx / g) * g;
+  }
 }
 function saveRulerCfg() {
   const { type, expr, unit } = S.ruler;
@@ -429,7 +475,11 @@ function renderRulerOpts() {
   box.innerHTML = h;
 
   box.querySelectorAll('#ru-type button').forEach(b => b.onclick = () => {
-    R.type = b.dataset.v; saveRulerCfg(); renderRulerOpts(); renderOverSoon();
+    if (R.type === b.dataset.v) return;
+    R.type = b.dataset.v;
+    R.a = 0;
+    placeRulerAtCenter();
+    saveRulerCfg(); renderRulerOpts(); renderOverSoon();
   });
   if (R.type !== 'fn') return;
 
