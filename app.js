@@ -1034,6 +1034,7 @@ function saveRulerCfg() {
 }
 function renderRulerOpts() {
   const box = $('#ruler-opts'), R = S.ruler;
+  if (!box) return;
   if (!R.on) { box.innerHTML = ''; return; }
   const types = [['line', '直線'], ['poly', 'xⁿ'], ['log', 'log'], ['exp', 'aˣ']];
   let h = `<div class="seg" id="ru-type">${types.map(([v, l]) => `<button data-v="${v}" class="${R.type === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
@@ -1445,7 +1446,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=4').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
