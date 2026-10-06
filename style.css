@@ -66,10 +66,26 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 }
 #title:focus { outline: 2px solid var(--accent-soft); background: #fff; }
 
-#zoom {
+#topright {
   position: fixed; top: calc(10px + var(--safe-t)); right: 10px; z-index: 10;
-  height: 40px; padding: 0 12px; font-variant-numeric: tabular-nums; color: var(--muted);
+  display: flex; gap: 6px;
 }
+#zoom { height: 40px; padding: 0 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+
+#sync {
+  height: 40px; padding: 0 12px 0 10px; display: flex; align-items: center; gap: 6px;
+  color: var(--muted); position: relative; white-space: nowrap;
+}
+#sync svg { width: 20px; height: 20px; display: block; }
+#sync .dot { position: absolute; left: 24px; top: 9px; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+#sync.s-ok .dot { background: #16a34a; }
+#sync.s-syncing .dot { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+#sync.s-error .dot { background: var(--danger); }
+#sync.s-offline .dot { background: #9ca3af; }
+#sync.s-signedout { color: var(--accent); font-weight: 600; }
+#sync.s-off { opacity: .55; }
+@keyframes pulse { 50% { opacity: .3; } }
+.sync-user { font-weight: 600; margin: 0 2px; word-break: break-all; }
 
 /* ツールバー */
 #dock {
@@ -160,14 +176,18 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 @media (max-width: 1000px) {
   #dock { top: auto; bottom: calc(10px + var(--safe-b)); }
   #options { order: 0; }
-  #topbar { max-width: calc(100vw - 100px); }
+  #topbar { max-width: calc(100vw - 170px); }
   #title { width: 160px; }
+  #zoom { display: none; }  /* スマホはピンチで十分 */
   .ibtn { width: 36px; height: 36px; }
 }
 @media (max-width: 520px) {
   #toolbar .ibtn { width: 33px; }
   #toolbar .sep { margin: 0 2px; }
   #toolbar [data-tool="hand"] { display: none; }  /* スマホは2本指でスクロールできるので省略 */
+  #sync .label { display: none; }
+  #sync { padding: 0 9px; }
+  #sync .dot { left: 23px; }
   .sw { width: 26px; height: 26px; }
   .wd { width: 28px; }
 }

@@ -385,6 +385,7 @@ function changed() {
   if (S.board) S.board.updatedAt = Date.now();
   updateHistoryButtons();
   scheduleSave();
+  window.Sync?.changed();
   render();
 }
 function scheduleSave() {
@@ -868,6 +869,7 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
@@ -944,7 +946,7 @@ function openPop(pop, btn) {
 }
 function closePops() { $$('.pop').forEach(p => p.hidden = true); }
 document.addEventListener('pointerdown', e => {
-  if (!e.target.closest('.pop') && !e.target.closest('#btn-bg') && !e.target.closest('#btn-more')) closePops();
+  if (!e.target.closest('.pop') && !e.target.closest('#btn-bg') && !e.target.closest('#btn-more') && !e.target.closest('#sync')) closePops();
 }, true);
 
 function syncSeg(el, value) { el.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === String(value))); }
@@ -1027,7 +1029,7 @@ function exportPNG() {
 
 async function exportJSON() {
   saveNow();
-  const boards = await Store.all();
+  const boards = (await Store.all()).filter(b => !b.deleted);
   const data = { app: 'canvas-note', version: 1, exportedAt: new Date().toISOString(), boards };
   const d = new Date();
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
@@ -1043,31 +1045,42 @@ $('#file-import').addEventListener('change', async e => {
     if (!Array.isArray(data.boards)) throw new Error('形式が違います');
     if (!confirm(`${data.boards.length} 個のボードを読み込みます。同じボードがあれば上書きされます。よろしいですか？`)) return;
     saveNow();
-    for (const b of data.boards) if (b && b.id && Array.isArray(b.strokes)) await Store.put(b);
+    for (const b of data.boards) {
+      if (!b || !b.id || b.deleted || !Array.isArray(b.strokes)) continue;
+      delete b.syncedAt;           // 読み込んだものはクラウドにも送り直す
+      b.updatedAt = Date.now();
+      await Store.put(b);
+    }
     await loadBoards();
+    window.Sync?.changed();
     toast('読み込みました');
   } catch (err) { toast('読み込めませんでした: ' + err.message); }
 });
 
 /* =========================================================
    ボード管理
+   削除したボードは、同期済みなら「削除済み」の印を残して他の端末に伝える
    ========================================================= */
+const visibleBoards = () => S.boards.filter(b => !b.deleted);
+const newest = () => visibleBoards().sort((a, b) => b.updatedAt - a.updatedAt)[0];
+
 function newBoardData(name) {
   const t = Date.now();
   return { id: uid(), name, createdAt: t, updatedAt: t, bg: LS.get('lastBg', { type: 'grid', size: 32 }), view: { x: 0, y: 0, s: 1 }, strokes: [] };
 }
+async function ensureBoard() {
+  if (visibleBoards().length) return;
+  const b = newBoardData(S.boards.length ? '新しいボード' : 'はじめてのボード');
+  await Store.put(b);
+  S.boards.push(b);
+}
 async function loadBoards() {
   S.boards = await Store.all();
-  if (!S.boards.length) {
-    const b = newBoardData('はじめてのボード');
-    await Store.put(b);
-    S.boards = [b];
-  }
+  await ensureBoard();
   const last = LS.get('lastBoard', null);
   S.board = null; // 読み込み直後なので、古いメモリ内容で上書き保存しない
-  openBoard(S.boards.find(b => b.id === last) || newest());
+  openBoard(visibleBoards().find(b => b.id === last) || newest());
 }
-const newest = () => S.boards.slice().sort((a, b) => b.updatedAt - a.updatedAt)[0];
 
 function openBoard(b) {
   if (S.board && S.board !== b) saveNow();
@@ -1090,7 +1103,7 @@ function renderBoardList() {
   const ul = $('#board-list');
   const fmt = t => new Date(t).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   ul.innerHTML = '';
-  for (const b of S.boards.slice().sort((a, b) => b.updatedAt - a.updatedAt)) {
+  for (const b of visibleBoards().sort((a, b) => b.updatedAt - a.updatedAt)) {
     const li = document.createElement('li');
     if (b === S.board) li.className = 'current';
     li.innerHTML = `<div class="meta"><div class="name"></div><div class="date">${fmt(b.updatedAt)}</div></div>
@@ -1105,21 +1118,31 @@ function renderBoardList() {
       const name = prompt('ボード名', b.name);
       if (name && name.trim()) renameBoard(b, name.trim());
     };
-    del.onclick = async e => {
+    del.onclick = e => {
       e.stopPropagation();
-      if (!confirm(`「${b.name}」を削除します。元に戻せません。`)) return;
-      await Store.del(b.id);
-      S.boards = S.boards.filter(x => x !== b);
-      if (!S.boards.length) { const nb = newBoardData('新しいボード'); await Store.put(nb); S.boards = [nb]; }
-      if (b === S.board) { S.board = null; openBoard(newest()); } else renderBoardList();
+      if (confirm(`「${b.name}」を削除します。元に戻せません。`)) deleteBoard(b);
     };
     ul.appendChild(li);
   }
 }
+async function deleteBoard(b) {
+  if (b.syncedAt) {
+    Object.assign(b, { deleted: true, strokes: [], updatedAt: Date.now() });
+    await Store.put(b);
+    window.Sync?.changed();
+  } else {
+    await Store.del(b.id);
+    S.boards = S.boards.filter(x => x !== b);
+  }
+  await ensureBoard();
+  if (b === S.board) { S.board = null; openBoard(newest()); } else renderBoardList();
+}
 function renameBoard(b, name) {
   b.name = name;
+  b.updatedAt = Date.now();
   if (b === S.board) { $('#title').value = name; document.title = name + ' – Canvas Note'; saveNow(); }
   else Store.put(b);
+  window.Sync?.changed();
   renderBoardList();
 }
 
@@ -1131,7 +1154,7 @@ $('#title').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.b
 
 $('#btn-new').onclick = async () => {
   saveNow();
-  const b = newBoardData('ボード ' + (S.boards.length + 1));
+  const b = newBoardData('ボード ' + (visibleBoards().length + 1));
   await Store.put(b);
   S.boards.push(b);
   openBoard(b);
@@ -1153,11 +1176,97 @@ function toast(msg) {
 }
 
 /* =========================================================
+   クラウド同期との接続（sync.js から使う）
+   ========================================================= */
+const SYNC_LABEL = { off: '同期オフ', signedout: 'ログイン', syncing: '同期中…', ok: '同期済み', offline: 'オフライン', error: '同期エラー' };
+const syncState = { status: 'off', user: null, msg: '' };
+
+function renderSync() {
+  const btn = $('#sync');
+  btn.className = 'chip s-' + syncState.status;
+  btn.querySelector('.label').textContent = SYNC_LABEL[syncState.status];
+  btn.title = syncState.msg || SYNC_LABEL[syncState.status];
+  $('#sync-user').textContent = syncState.user || '';
+  $('#sync-state').textContent = SYNC_LABEL[syncState.status] + (syncState.msg ? '：' + syncState.msg : '');
+}
+
+window.App = {
+  boards: () => S.boards,
+  strokesOf: b => (b === S.board ? S.strokes : b.strokes || []),
+  saveNow,
+  persist(b) {
+    if (b === S.board) { saveNow(); return Promise.resolve(); }
+    return Store.put(b);
+  },
+  // クラウドの内容でボードを置き換える。その間に編集が入っていたら見送る（次の同期で処理）
+  async applyRemote(data, force) {
+    let b = S.boards.find(x => x.id === data.id);
+    if (b && !force && b.updatedAt !== b.syncedAt) return;
+    if (b) Object.assign(b, data, { deleted: false });
+    else { b = { ...data, view: { x: 0, y: 0, s: 1 } }; S.boards.push(b); }
+    await Store.put(b);
+    if (b === S.board) {
+      if (act) cancelAction();
+      S.strokes = b.strokes; S.undo = []; S.redo = []; S.sel = null;
+      $('#title').value = b.name;
+      syncBgUI(); updateHistoryButtons(); render();
+    }
+    renderBoardList();
+  },
+  async removeLocal(id) {
+    const b = S.boards.find(x => x.id === id);
+    await Store.del(id);
+    S.boards = S.boards.filter(x => x.id !== id);
+    await ensureBoard();
+    if (b === S.board) { S.board = null; openBoard(newest()); } else renderBoardList();
+  },
+  async duplicateAsConflict(src) {
+    const t = Date.now();
+    const b = {
+      id: uid(), name: src.name + '（競合コピー）', createdAt: t - 1, updatedAt: t,
+      bg: src.bg, view: { x: 0, y: 0, s: 1 }, strokes: (src === S.board ? S.strokes : src.strokes || []).slice(),
+    };
+    await Store.put(b);
+    S.boards.push(b);
+    renderBoardList();
+    toast(`「${src.name}」が両方の端末で編集されていたので、コピーを残しました`);
+  },
+  setSyncStatus(status, msg = '') { syncState.status = status; syncState.msg = msg; renderSync(); },
+  setSyncUser(u) { syncState.user = u; renderSync(); },
+  syncReady() {},
+};
+
+$('#sync').onclick = e => {
+  if (syncState.status === 'off') {
+    toast(window.FIREBASE_CONFIG ? '同期の準備中です…' : 'クラウド同期はまだ設定されていません');
+    return;
+  }
+  if (syncState.status === 'signedout') {
+    window.Sync.signIn().catch(err => toast('ログインできませんでした: ' + err.message));
+    return;
+  }
+  openPop($('#pop-sync'), e.currentTarget);
+};
+$('#sync-now').onclick = () => { closePops(); window.Sync?.syncNow(); };
+$('#sync-out').onclick = () => {
+  closePops();
+  if (confirm('ログアウトしますか？この端末のノートはそのまま残ります。')) window.Sync?.signOut();
+};
+
+/* =========================================================
    起動
    ========================================================= */
 fillIcons();
 syncSeg($('#finger'), S.finger);
 setTool('pen');
+renderSync();
 window.addEventListener('resize', resize);
 resize();
-loadBoards().catch(err => toast('データを開けませんでした: ' + err.message));
+loadBoards()
+  .then(() => {
+    if (!window.FIREBASE_CONFIG) return;
+    App.setSyncStatus('syncing');
+    return import('./sync.js').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+  })
+  .catch(err => toast('データを開けませんでした: ' + err.message));
+

@@ -22,8 +22,11 @@
   <input id="title" spellcheck="false" autocomplete="off" aria-label="ボード名">
 </div>
 
-<!-- 右上：ズーム -->
-<button id="zoom" class="chip" title="100%に戻す">100%</button>
+<!-- 右上：同期とズーム -->
+<div id="topright">
+  <button id="sync" class="chip s-off"><span class="dot"></span><span data-icon="cloud"></span><span class="label">同期オフ</span></button>
+  <button id="zoom" class="chip" title="100%に戻す">100%</button>
+</div>
 
 <!-- ツールバー -->
 <div id="dock">
@@ -86,6 +89,15 @@
   <p class="hint">自動：ペン（Apple Pencil など）を使うと、それ以降は指でスクロールになります。</p>
 </div>
 
+<div id="pop-sync" class="pop chip" hidden>
+  <div class="pop-label">クラウド同期</div>
+  <div id="sync-user" class="sync-user"></div>
+  <div id="sync-state" class="hint"></div>
+  <hr>
+  <button class="mitem" id="sync-now">今すぐ同期</button>
+  <button class="mitem" id="sync-out">ログアウト</button>
+</div>
+
 <!-- ボード一覧 -->
 <div id="drawer-scrim" hidden></div>
 <aside id="drawer" aria-hidden="true">
@@ -99,6 +111,7 @@
 <input type="file" id="file-import" accept="application/json,.json" hidden>
 <div id="toast" hidden></div>
 
+<script src="firebase-config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
