@@ -66,7 +66,8 @@ const S = {
   pen: LS.get('pen', { color: PEN_COLORS[0], width: 3 }),
   hl: LS.get('hl', { color: HL_COLORS[0], width: 20 }),
   eraser: LS.get('eraser', { mode: 'object', size: 16 }),
-  ruler: { on: false, cx: 0, cy: 0, a: 0, ...LS.get('ruler', { type: 'line', n: 2, k: 1, base: 10, ea: 2, unit: 40, flip: false }) },
+  // 定規はキャンバス（ワールド座標）に固定。wx,wy = 原点、unit = 関数定規の1目盛（ワールド単位）
+  ruler: { on: false, wx: 0, wy: 0, a: 0, ...LS.get('ruler2', { type: 'line', expr: 'x^2', unit: 32 }) },
   sel: null,          // { set:Set<stroke>, bb, dx, dy }
   cur: null,          // 描画中のストローク
   lasso: null,        // 投げ縄の点（ワールド座標）
@@ -92,7 +93,6 @@ function resize() {
     c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
     c.style.width = W + 'px'; c.style.height = H + 'px';
   }
-  if (!S.ruler.cx) { S.ruler.cx = W / 2; S.ruler.cy = H / 2; }
   render();
 }
 
@@ -281,206 +281,7 @@ function renderOver() {
   }
 }
 
-/* =========================================================
-   定規
-   ========================================================= */
-function rulerLocal(x, y) {
-  const r = S.ruler, dx = x - r.cx, dy = y - r.cy, co = Math.cos(r.a), si = Math.sin(r.a);
-  return { lx: dx * co + dy * si, ly: -dx * si + dy * co };
-}
-function rulerToScreen(lx, ly) {
-  const r = S.ruler, co = Math.cos(r.a), si = Math.sin(r.a);
-  return { x: r.cx + lx * co - ly * si, y: r.cy + lx * si + ly * co };
-}
-function rulerHit(x, y) {
-  if (!S.ruler.on) return null;
-  const { lx, ly } = rulerLocal(x, y);
-  if (S.ruler.type !== 'line') {
-    // 関数定規：原点の丸で移動、左下のつまみで回転
-    if (Math.hypot(lx - CURVE_KNOB.x, ly - CURVE_KNOB.y) <= 22) return 'knob';
-    if (Math.hypot(lx, ly) <= 22) return 'body';
-    return null;
-  }
-  if (Math.hypot(lx - RULER_KNOB, ly) <= 24) return 'knob';
-  if (Math.abs(ly) <= RULER_W / 2) return 'body';
-  return null;
-}
-function rulerSnapSide(x, y) {
-  if (S.ruler.type !== 'line') return 0;
-  const { ly } = rulerLocal(x, y);
-  const d = Math.abs(ly);
-  return d > RULER_W / 2 && d <= RULER_W / 2 + RULER_SNAP ? Math.sign(ly) : 0;
-}
-function rulerProject(x, y, side, lineW) {
-  const { lx } = rulerLocal(x, y);
-  return rulerToScreen(lx, side * (RULER_W / 2 + lineW / 2 + 0.5));
-}
-function setRulerAngle(a) {
-  // 15° の倍数の近くでは吸着
-  const step = Math.PI / 12, near = Math.round(a / step) * step;
-  if (Math.abs(a - near) < 0.025) a = near;
-  S.ruler.a = a;
-}
-function rulerDeg() {
-  const m = S.ruler.type === 'line' ? 180 : 360; // 直線は 180° 回すと同じ形
-  let d = Math.round((-S.ruler.a * 180 / Math.PI) % m);
-  if (d < 0) d += m;
-  return d === m ? 0 : d;
-}
-
-/* ---------- 関数定規（y = axⁿ / log / aˣ） ----------
-   定規の座標：原点 = (cx, cy)、x 軸 = 定規の向き、1目盛 = unit px。
-   カーブは画面より少し広い範囲を、約2pxおきの折れ線にしてキャッシュする。 */
-const CURVE_KNOB = { x: -80, y: 80 };
-const CURVE_SNAP = 30;  // カーブからこの距離以内で描き始めると吸着
-const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹', SUB = '₀₁₂₃₄₅₆₇₈₉';
-const fmtNum = v => (v === Math.E ? 'e' : String(+v.toFixed(3)));
-const parseNum = s => (s.trim().toLowerCase() === 'e' ? Math.E : parseFloat(s.replace('−', '-')));
-
-function curveLabel() {
-  const R = S.ruler, neg = R.flip ? '−' : '';
-  if (R.type === 'poly') {
-    const k = R.flip ? -R.k : R.k;
-    const kk = k === 1 ? '' : k === -1 ? '−' : fmtNum(k).replace('-', '−');
-    const p = R.n === 1 ? '' : String(R.n).replace(/\d/g, d => SUP[d]);
-    return `y = ${kk}x${p}`;
-  }
-  if (R.type === 'log') return `y = ${neg}` + (R.base === Math.E ? 'ln x' : `log${fmtNum(R.base).replace(/\d/g, d => SUB[d])} x`);
-  return `y = ${neg}${fmtNum(R.ea)}ˣ`;
-}
-
-let curveCache = { key: '', segs: [] };
-function rulerCurve() {
-  const R = S.ruler, L = Math.hypot(W, H) * 1.6;
-  const key = [R.type, R.n, R.k, R.base, R.ea, R.unit, R.flip, Math.round(L)].join();
-  if (curveCache.key === key) return curveCache.segs;
-  const sgn = R.flip ? -1 : 1, unit = R.unit, U = L / unit;
-  let g, swap = false;
-  if (R.type === 'poly') g = u => R.k * Math.pow(u, R.n);
-  else if (R.type === 'exp') g = u => Math.pow(R.ea, u);
-  else { g = t => Math.pow(R.base, t); swap = true; } // log は aˣ を y = x で折り返したもの
-  const segs = [];
-  let cur = [];
-  for (let u = -U; u <= U;) {
-    const v = g(u);
-    const ok = Number.isFinite(v) && Math.abs(v) * unit <= L;
-    if (ok) {
-      const px = swap ? v : u, py = swap ? u : v;
-      cur.push(px * unit, -py * sgn * unit);
-    } else if (cur.length) { segs.push(cur); cur = []; }
-    let s = (g(u + 1e-6) - v) / 1e-6;
-    if (!ok || !Number.isFinite(s)) s = 0;
-    u += Math.max(2 / (unit * Math.sqrt(1 + s * s)), 1e-7);
-  }
-  if (cur.length) segs.push(cur);
-  curveCache = { key, segs };
-  return segs;
-}
-
-// カーブ上の最も近い点（定規の座標）。hint があればその付近だけ探す＝描いている途中で別の枝に飛ばない
-function nearestOnCurve(lx, ly, hint) {
-  const segs = rulerCurve();
-  let best = { d: Infinity };
-  const scan = (s, i0, i1) => {
-    const P = segs[s];
-    for (let i = i0; i < i1; i++) {
-      const ax = P[i * 2], ay = P[i * 2 + 1], dx = P[i * 2 + 2] - ax, dy = P[i * 2 + 3] - ay;
-      const l = dx * dx + dy * dy;
-      const t = l ? clamp(((lx - ax) * dx + (ly - ay) * dy) / l, 0, 1) : 0;
-      const x = ax + dx * t, y = ay + dy * t, d = Math.hypot(lx - x, ly - y);
-      if (d < best.d) best = { d, x, y, s, i };
-    }
-  };
-  if (hint && segs[hint.s]) {
-    const n = segs[hint.s].length / 2;
-    scan(hint.s, Math.max(0, hint.i - 150), Math.min(n - 1, hint.i + 150));
-  } else segs.forEach((P, s) => scan(s, 0, P.length / 2 - 1));
-  return best;
-}
-
-function drawKnob(c, x, y) {
-  c.beginPath(); c.arc(x, y, 18, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(255,255,255,.95)'; c.fill();
-  c.lineWidth = 1; c.strokeStyle = 'rgba(51,65,85,.5)'; c.stroke();
-  c.beginPath(); c.arc(x, y, 8, -Math.PI * 0.9, Math.PI * 0.4);
-  c.strokeStyle = '#334155'; c.lineWidth = 1.6; c.stroke();
-  const ex = x + 8 * Math.cos(Math.PI * 0.4), ey = y + 8 * Math.sin(Math.PI * 0.4);
-  c.beginPath(); c.moveTo(ex - 4, ey - 1); c.lineTo(ex, ey); c.lineTo(ex + 1, ey - 4); c.stroke();
-}
-function drawPill(c, label, x, y, align) {
-  c.font = '600 13px system-ui, sans-serif';
-  const tw = c.measureText(label).width + 16, x0 = align === 'left' ? x : x - tw / 2;
-  c.fillStyle = 'rgba(31,35,40,.85)';
-  c.beginPath(); c.roundRect ? c.roundRect(x0, y - 12, tw, 24, 12) : c.rect(x0, y - 12, tw, 24); c.fill();
-  c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  c.fillText(label, x0 + tw / 2, y + 0.5);
-}
-
-function drawCurveRuler(c) {
-  const R = S.ruler, L = Math.hypot(W, H) * 1.6, u = R.unit;
-  c.save();
-  c.translate(R.cx, R.cy);
-  c.rotate(R.a);
-  // 座標軸と目盛
-  const n = Math.floor(L / u);
-  c.strokeStyle = 'rgba(51,65,85,.45)'; c.lineWidth = 1;
-  c.beginPath();
-  c.moveTo(-L, 0); c.lineTo(L, 0); c.moveTo(0, -L); c.lineTo(0, L);
-  for (let i = -n; i <= n; i++) {
-    if (!i) continue;
-    c.moveTo(i * u, -4); c.lineTo(i * u, 4);
-    c.moveTo(-4, i * u); c.lineTo(4, i * u);
-  }
-  c.stroke();
-  if (u >= 24) {
-    c.fillStyle = 'rgba(51,65,85,.75)'; c.font = '11px system-ui, sans-serif';
-    c.textAlign = 'center'; c.textBaseline = 'top';
-    for (let i = -n; i <= n; i++) if (i) c.fillText(String(i).replace('-', '−'), i * u, 7);
-    c.textAlign = 'right'; c.textBaseline = 'middle';
-    for (let i = -n; i <= n; i++) if (i) c.fillText(String(i).replace('-', '−'), -8, -i * u);
-  }
-  // カーブ（太い薄い帯 = 吸着する範囲の目安）
-  const segs = rulerCurve();
-  c.lineCap = 'round'; c.lineJoin = 'round';
-  for (const [w, col] of [[CURVE_SNAP, 'rgba(37,99,235,.07)'], [2, 'rgba(37,99,235,.8)']]) {
-    c.lineWidth = w; c.strokeStyle = col;
-    c.beginPath();
-    for (const P of segs) { c.moveTo(P[0], P[1]); for (let i = 2; i < P.length; i += 2) c.lineTo(P[i], P[i + 1]); }
-    c.stroke();
-  }
-  // 原点（ここを持って移動）
-  c.beginPath(); c.arc(0, 0, 11, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(255,255,255,.95)'; c.fill();
-  c.lineWidth = 1.5; c.strokeStyle = '#334155'; c.stroke();
-  c.beginPath(); c.arc(0, 0, 3, 0, Math.PI * 2); c.fillStyle = '#334155'; c.fill();
-  drawKnob(c, CURVE_KNOB.x, CURVE_KNOB.y);
-  c.restore();
-  const deg = rulerDeg();
-  drawPill(c, curveLabel() + (deg ? `   ${deg}°` : ''), R.cx + 18, R.cy - 28, 'left');
-}
-
-function drawRuler(c) {
-  if (S.ruler.type !== 'line') { drawCurveRuler(c); return; }
-  const r = S.ruler, L = Math.hypot(W, H) * 1.5, hw = RULER_W / 2;
-  c.save();
-  c.translate(r.cx, r.cy);
-  c.rotate(r.a);
-  c.fillStyle = 'rgba(148,163,184,.22)';
-  c.fillRect(-L, -hw, L * 2, RULER_W);
-  c.strokeStyle = 'rgba(51,65,85,.55)'; c.lineWidth = 1;
-  c.beginPath();
-  c.moveTo(-L, -hw); c.lineTo(L, -hw); c.moveTo(-L, hw); c.lineTo(L, hw);
-  for (let x = -Math.floor(L / 10) * 10; x <= L; x += 10) {
-    const t = x % 100 === 0 ? 16 : x % 50 === 0 ? 11 : 6;
-    c.moveTo(x, -hw); c.lineTo(x, -hw + t);
-    c.moveTo(x, hw); c.lineTo(x, hw - t);
-  }
-  c.stroke();
-  drawKnob(c, RULER_KNOB, 0);
-  c.restore();
-  drawPill(c, rulerDeg() + '°', r.cx, r.cy);
-}
-
+/* 定規は ruler.js */
 /* =========================================================
    履歴
    ========================================================= */
@@ -717,8 +518,8 @@ function updatePinch() {
   if (!a || !b) return;
   const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   if (act.type === 'ruler-pinch') {
-    S.ruler.cx = act.r0.cx + m.x - act.m0.x;
-    S.ruler.cy = act.r0.cy + m.y - act.m0.y;
+    S.ruler.wx = act.r0.wx + (m.x - act.m0.x) / S.view.s;
+    S.ruler.wy = act.r0.wy + (m.y - act.m0.y) / S.view.s;
     setRulerAngle(act.r0.a + Math.atan2(b.y - a.y, b.x - a.x) - act.ang0);
     renderOverSoon();
     return;
@@ -781,9 +582,10 @@ function onDown(e) {
 
   const rh = rulerHit(x, y);
   if (rh) {
+    const o = rulerOrigin();
     act = rh === 'knob'
-      ? { type: 'ruler-rot', pid: e.pointerId, off: Math.atan2(y - S.ruler.cy, x - S.ruler.cx) - S.ruler.a }
-      : { type: 'ruler-move', pid: e.pointerId, lx: x, ly: y };
+      ? { type: 'ruler-rot', pid: e.pointerId, off: Math.atan2(y - o.y, x - o.x) - S.ruler.a }
+      : { type: 'ruler-move', pid: e.pointerId, gx: S.ruler.wx - x / S.view.s, gy: S.ruler.wy - y / S.view.s };
     return;
   }
 
@@ -794,11 +596,7 @@ function onDown(e) {
       S.sel = null;
       const cfg = S.tool === 'hl' ? S.hl : S.pen;
       const st = { id: uid(), t: S.tool, c: cfg.color, w: cfg.width, pr: S.tool === 'pen' && e.pointerType === 'pen', p: [] };
-      act = { type: 'draw', pid: e.pointerId, st, snap: S.ruler.on ? rulerSnapSide(x, y) : 0, curve: null };
-      if (S.ruler.on && S.ruler.type !== 'line') {
-        const { lx, ly } = rulerLocal(x, y), r = nearestOnCurve(lx, ly);
-        if (r.d <= CURVE_SNAP) act.curve = r;
-      }
+      act = { type: 'draw', pid: e.pointerId, st, snap: S.ruler.on ? rulerSnapSide(x, y) : 0, curve: curveSnapStart(x, y) };
       S.cur = st;
       addPoint(e);
       renderOverSoon();
@@ -830,8 +628,8 @@ function addPoint(e) {
   let x = e.clientX, y = e.clientY;
   if (act.snap) ({ x, y } = rulerProject(x, y, act.snap, st.w * S.view.s));
   else if (act.curve) {
-    const { lx, ly } = rulerLocal(x, y), r = nearestOnCurve(lx, ly, act.curve);
-    if (r.d < Infinity) { act.curve = r; ({ x, y } = rulerToScreen(r.x, r.y)); }
+    const r = curveSnapMove(x, y, act.curve);
+    if (r) { act.curve = r.hint; x = r.x; y = r.y; }
   }
   const w = toWorld(x, y);
   const pr = st.pr ? (e.pressure || 0.5) : 0.5;
@@ -881,13 +679,15 @@ function onMove(e) {
       viewChanged();
       break;
     case 'ruler-move':
-      S.ruler.cx += dx; S.ruler.cy += dy;
+      moveRulerTo(act.gx + e.clientX / S.view.s, act.gy + e.clientY / S.view.s);
       renderOverSoon();
       break;
-    case 'ruler-rot':
-      setRulerAngle(Math.atan2(e.clientY - S.ruler.cy, e.clientX - S.ruler.cx) - act.off);
+    case 'ruler-rot': {
+      const o = rulerOrigin();
+      setRulerAngle(Math.atan2(e.clientY - o.y, e.clientX - o.x) - act.off);
       renderOverSoon();
       break;
+    }
   }
 }
 
@@ -1020,59 +820,6 @@ function setTool(t) {
   setCursor();
   renderOverSoon();
 }
-function toggleRuler() {
-  S.ruler.on = !S.ruler.on;
-  if (S.ruler.on) { S.ruler.cx = W / 2; S.ruler.cy = H / 2; }
-  $('#btn-ruler').classList.toggle('active', S.ruler.on);
-  renderRulerOpts();
-  renderOverSoon();
-}
-
-function saveRulerCfg() {
-  const { type, n, k, base, ea, unit, flip } = S.ruler;
-  LS.set('ruler', { type, n, k, base, ea, unit, flip });
-}
-function renderRulerOpts() {
-  const box = $('#ruler-opts'), R = S.ruler;
-  if (!box) return;
-  if (!R.on) { box.innerHTML = ''; return; }
-  const types = [['line', '直線'], ['poly', 'xⁿ'], ['log', 'log'], ['exp', 'aˣ']];
-  let h = `<div class="seg" id="ru-type">${types.map(([v, l]) => `<button data-v="${v}" class="${R.type === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  if (R.type === 'poly') {
-    h += `<span class="sep"></span><span class="fld">n<button class="step" data-d="-1">−</button><b>${R.n}</b><button class="step" data-d="1">+</button></span>`
-      + `<label class="fld">a<input id="ru-num" data-k="k" value="${fmtNum(R.k)}" autocomplete="off"></label>`;
-  }
-  if (R.type === 'log') h += `<span class="sep"></span><label class="fld">底<input id="ru-num" data-k="base" value="${fmtNum(R.base)}" autocomplete="off"></label>`;
-  if (R.type === 'exp') h += `<span class="sep"></span><label class="fld">a<input id="ru-num" data-k="ea" value="${fmtNum(R.ea)}" autocomplete="off"></label>`;
-  if (R.type !== 'line') {
-    h += `<span class="sep"></span><label class="fld">目盛<input type="range" id="ru-unit" min="16" max="160" step="2" value="${R.unit}"></label>`
-      + `<button class="ibtn ${R.flip ? 'active' : ''}" id="ru-flip" title="上下反転">⇅</button>`;
-  }
-  box.innerHTML = h;
-
-  const update = () => { saveRulerCfg(); renderRulerOpts(); renderOverSoon(); };
-  box.querySelectorAll('#ru-type button').forEach(b => b.onclick = () => { R.type = b.dataset.v; update(); });
-  box.querySelectorAll('.step').forEach(b => b.onclick = () => { R.n = clamp(R.n + +b.dataset.d, 1, 9); update(); });
-  const num = box.querySelector('#ru-num');
-  if (num) {
-    num.onchange = () => {
-      const key = num.dataset.k, v = parseNum(num.value);
-      const valid = Number.isFinite(v) && (key === 'k' ? v !== 0 : v > 0 && v !== 1);
-      if (valid) R[key] = v;
-      else toast(key === 'k' ? '0 以外の数を入れてください' : '0 より大きく 1 以外の数を入れてください（e も可）');
-      update();
-    };
-    num.onkeydown = e => { if (e.key === 'Enter') num.blur(); };
-  }
-  const unit = box.querySelector('#ru-unit');
-  if (unit) {
-    unit.oninput = () => { R.unit = +unit.value; renderOverSoon(); };
-    unit.onchange = saveRulerCfg;
-  }
-  const flip = box.querySelector('#ru-flip');
-  if (flip) flip.onclick = () => { R.flip = !R.flip; update(); };
-}
-
 function swatchHTML(colors, current, attr = 'data-color') {
   const isCustom = !colors.includes(current);
   return colors.map(c => `<button class="sw ${c === current ? 'active' : ''}" ${attr}="${c}" title="${c}"><i style="background:${c}"></i></button>`).join('')
@@ -1446,7 +1193,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=4').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=5').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
