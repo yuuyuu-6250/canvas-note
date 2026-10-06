@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 /* =========================================================
    保存（IndexedDB）
@@ -46,10 +46,50 @@ const HL_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd', '#fdba74'];
 const PEN_WIDTHS = [1.5, 3, 5, 9];
 const HL_WIDTHS = [12, 20, 32];
 const ERASER_SIZES = [8, 16, 32];
-const PAPER = '#ffffff';
-const BG_LINE = '#e3e7ee';
-const BG_MAJOR = '#cfd5df';
-const BG_DOT = '#c4cad4';
+// キャンバスに描く色（テーマごと）
+const THEMES = {
+  light: {
+    paper: '#ffffff', bgLine: '#e3e7ee', bgMajor: '#cfd5df', bgDot: '#c4cad4', hlAlpha: 0.42,
+    accent: '#2563eb', accentSoft: 'rgba(37,99,235,.06)', eraserFill: 'rgba(255,255,255,.5)', eraserLine: 'rgba(0,0,0,.45)',
+    rulerFill: 'rgba(148,163,184,.22)', rulerLine: 'rgba(51,65,85,.55)', rulerText: 'rgba(51,65,85,.8)', axis: 'rgba(51,65,85,.5)',
+    knobFill: 'rgba(255,255,255,.95)', knobLine: 'rgba(51,65,85,.5)', knobIcon: '#334155',
+    curve: 'rgba(37,99,235,.8)', curveBand: 'rgba(37,99,235,.07)', pillBg: 'rgba(31,35,40,.85)', pillText: '#ffffff',
+  },
+  dark: {
+    paper: '#1b1c20', bgLine: '#2a2d34', bgMajor: '#393d46', bgDot: '#4a4f5a', hlAlpha: 0.5,
+    accent: '#60a5fa', accentSoft: 'rgba(96,165,250,.08)', eraserFill: 'rgba(255,255,255,.1)', eraserLine: 'rgba(255,255,255,.55)',
+    rulerFill: 'rgba(148,163,184,.14)', rulerLine: 'rgba(203,213,225,.5)', rulerText: 'rgba(203,213,225,.85)', axis: 'rgba(203,213,225,.45)',
+    knobFill: 'rgba(44,46,53,.95)', knobLine: 'rgba(203,213,225,.4)', knobIcon: '#cbd5e1',
+    curve: 'rgba(96,165,250,.9)', curveBand: 'rgba(96,165,250,.1)', pillBg: 'rgba(235,237,242,.92)', pillText: '#1f2328',
+  },
+};
+let T = THEMES.light;
+
+// ダークでは、保存した色はそのままに、暗い色（黒など）を明るくして表示する
+const inkCache = new Map();
+function inkColor(c, th = T) {
+  if (th !== THEMES.dark) return c;
+  let v = inkCache.get(c);
+  if (v) return v;
+  v = c;
+  const m = /^#([0-9a-f]{6})$/i.exec(c);
+  if (m) {
+    const n = parseInt(m[1], 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    if (l < 0.62) {
+      // 明るさだけ変える（色相・彩度は保つ）：黒は白っぽく、中くらいの色は少し明るく
+      const s = d ? d / (1 - Math.abs(2 * l - 1)) : 0;
+      let h = 0;
+      if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      if (h < 0) h += 6;
+      const L = Math.max(l < 0.5 ? 1 - l : l, 0.62), C =(1 - Math.abs(2 * L - 1)) * s, X = C * (1 - Math.abs((h % 2 + 2) % 2 - 1)), M = L - C / 2;
+      const [r1, g1, b1] = h < 1 ? [C, X, 0] : h < 2 ? [X, C, 0] : h < 3 ? [0, C, X] : h < 4 ? [0, X, C] : h < 5 ? [X, 0, C] : [C, 0, X];
+      v = '#' + [r1, g1, b1].map(x => Math.round((x + M) * 255).toString(16).padStart(2, '0')).join('');
+    }
+  }
+  inkCache.set(c, v);
+  return v;
+}
 const RULER_W = 84;       // 定規の幅（画面px）
 const RULER_KNOB = 150;   // 回転つまみの位置（中心からの距離）
 const RULER_SNAP = 48;    // 定規の縁に吸着する距離
@@ -74,6 +114,7 @@ const S = {
   undo: [], redo: [],
   penSeen: false,
   finger: LS.get('finger', 'auto'),
+  theme: LS.get('theme', 'auto'),   // auto | light | dark
 };
 
 /* ストローク = { id, t:'pen'|'hl', c:色, w:太さ, pr:筆圧あり, p:[x,y,筆圧, ...] }
@@ -156,29 +197,33 @@ function runs(st) {
   return g.runs = out;
 }
 
-function drawStroke(c, st) {
-  c.strokeStyle = st.c;
-  if (st.t === 'hl') c.globalAlpha = 0.42;
+function drawStroke(c, st, th = T) {
+  c.strokeStyle = inkColor(st.c, th);
+  if (st.t === 'hl') {
+    c.globalAlpha = th.hlAlpha;
+    if (th === THEMES.dark) c.globalCompositeOperation = 'screen'; // 暗い紙の上では光るように重ねる
+  }
   for (const r of runs(st)) { c.lineWidth = r.w; c.stroke(r.path); }
   c.globalAlpha = 1;
+  c.globalCompositeOperation = 'source-over';
 }
 
 /* ---------- 背景 ---------- */
-function drawBg(c, r, scale, bg) {
+function drawBg(c, r, scale, bg, th = T) {
   if (!bg || bg.type === 'none') return;
   let s = bg.size;
   while (s * scale < 8) s *= 2;
   const lw = 1 / scale;
   const x0 = Math.floor(r.x0 / s) * s, y0 = Math.floor(r.y0 / s) * s;
   if (bg.type === 'dots') {
-    c.fillStyle = BG_DOT;
+    c.fillStyle = th.bgDot;
     const d = 2.2 / scale;
     for (let x = x0; x <= r.x1; x += s)
       for (let y = y0; y <= r.y1; y += s) c.fillRect(x - d / 2, y - d / 2, d, d);
     return;
   }
   c.lineWidth = lw;
-  c.strokeStyle = BG_LINE;
+  c.strokeStyle = th.bgLine;
   c.beginPath();
   if (bg.type === 'grid') for (let x = x0; x <= r.x1; x += s) { c.moveTo(x, r.y0); c.lineTo(x, r.y1); }
   for (let y = y0; y <= r.y1; y += s) { c.moveTo(r.x0, y); c.lineTo(r.x1, y); }
@@ -187,7 +232,7 @@ function drawBg(c, r, scale, bg) {
     // 4マスごとに少し濃い線
     const M = s * 4;
     const mx0 = Math.floor(r.x0 / M) * M, my0 = Math.floor(r.y0 / M) * M;
-    c.strokeStyle = BG_MAJOR;
+    c.strokeStyle = th.bgMajor;
     c.beginPath();
     for (let x = mx0; x <= r.x1; x += M) { c.moveTo(x, r.y0); c.lineTo(x, r.y1); }
     for (let y = my0; y <= r.y1; y += M) { c.moveTo(r.x0, y); c.lineTo(r.x1, y); }
@@ -205,7 +250,7 @@ function renderMain() {
   if (!S.board) return;
   const c = mc, v = S.view;
   c.setTransform(DPR, 0, 0, DPR, 0, 0);
-  c.fillStyle = PAPER;
+  c.fillStyle = T.paper;
   c.fillRect(0, 0, W, H);
   c.setTransform(DPR * v.s, 0, 0, DPR * v.s, DPR * v.x, DPR * v.y);
   const r = viewRect();
@@ -246,8 +291,8 @@ function renderOver() {
     c.beginPath();
     S.lasso.forEach((p, i) => { const s = toScreen(p.x, p.y); i ? c.lineTo(s.x, s.y) : c.moveTo(s.x, s.y); });
     c.closePath();
-    c.fillStyle = 'rgba(37,99,235,.06)'; c.fill();
-    c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = '#2563eb'; c.stroke(); c.setLineDash([]);
+    c.fillStyle = T.accentSoft; c.fill();
+    c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = T.accent; c.stroke(); c.setLineDash([]);
   }
 
   // 選択範囲
@@ -255,7 +300,7 @@ function renderOver() {
   if (S.sel) {
     const bb = S.sel.bb;
     const a = toScreen(bb.x0 + S.sel.dx, bb.y0 + S.sel.dy), b = toScreen(bb.x1 + S.sel.dx, bb.y1 + S.sel.dy);
-    c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = '#2563eb';
+    c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = T.accent;
     c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
     c.setLineDash([]);
     if (act && act.type === 'move') sb.hidden = true;
@@ -276,8 +321,8 @@ function renderOver() {
   if (S.tool === 'eraser' && hover) {
     c.beginPath();
     c.arc(hover.x, hover.y, S.eraser.size, 0, Math.PI * 2);
-    c.fillStyle = 'rgba(255,255,255,.5)'; c.fill();
-    c.lineWidth = 1; c.strokeStyle = 'rgba(0,0,0,.45)'; c.stroke();
+    c.fillStyle = T.eraserFill; c.fill();
+    c.lineWidth = 1; c.strokeStyle = T.eraserLine; c.stroke();
   }
 }
 
@@ -420,16 +465,24 @@ function pointInPoly(x, y, poly) {
 function selectByLasso(poly) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of poly) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+  // 線の一部でも投げ縄の中に入っていれば選択
   const set = new Set();
   for (const st of S.strokes) {
     const b = bbox(st);
     if (b.x1 < x0 || b.x0 > x1 || b.y1 < y0 || b.y0 > y1) continue;
-    const n = st.p.length / 3, step = Math.max(1, Math.floor(n / 60));
-    let inside = 0, total = 0;
-    for (let i = 0; i < n; i += step) { total++; if (pointInPoly(st.p[i * 3], st.p[i * 3 + 1], poly)) inside++; }
-    if (inside / total >= 0.5) set.add(st);
+    if (strokeTouchesPoly(st, poly)) set.add(st);
   }
   setSelection(set.size ? set : null);
+}
+function strokeTouchesPoly(st, poly) {
+  const p = st.p, n = p.length / 3;
+  for (let i = 0; i < n; i++) if (pointInPoly(p[i * 3], p[i * 3 + 1], poly)) return true;
+  // 点と点の間だけが中を通っている場合（素早く描いた線など）
+  for (let i = 1; i < n; i++) {
+    const a = { x: p[i * 3 - 3], y: p[i * 3 - 2] }, b = { x: p[i * 3], y: p[i * 3 + 1] };
+    for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) if (segsCross(a, b, poly[j], poly[k])) return true;
+  }
+  return false;
 }
 function setSelection(set) {
   if (!set) { S.sel = null; renderOverSoon(); return; }
@@ -823,8 +876,8 @@ function setTool(t) {
 }
 function swatchHTML(colors, current, attr = 'data-color') {
   const isCustom = !colors.includes(current);
-  return colors.map(c => `<button class="sw ${c === current ? 'active' : ''}" ${attr}="${c}" title="${c}"><i style="background:${c}"></i></button>`).join('')
-    + `<label class="sw custom ${isCustom ? 'active' : ''}" title="色を選ぶ"><i ${isCustom ? `style="background:${current}"` : ''}></i><input type="color" value="${isCustom ? current : '#000000'}"></label>`;
+  return colors.map(c => `<button class="sw ${c === current ? 'active' : ''}" ${attr}="${c}" title="${c}"><i style="background:${inkColor(c)}"></i></button>`).join('')
+    + `<label class="sw custom ${isCustom ? 'active' : ''}" title="色を選ぶ"><i ${isCustom ? `style="background:${inkColor(current)}"` : ''}></i><input type="color" value="${isCustom ? current : '#000000'}"></label>`;
 }
 
 function renderOptions() {
@@ -856,7 +909,7 @@ function saveToolPrefs() { LS.set('pen', S.pen); LS.set('hl', S.hl); LS.set('era
 
 function renderSelColors() {
   const box = $('#sel-colors');
-  box.innerHTML = PEN_COLORS.map(c => `<button class="sw" data-color="${c}" title="${c}"><i style="background:${c}"></i></button>`).join('');
+  box.innerHTML = PEN_COLORS.map(c => `<button class="sw" data-color="${c}" title="${c}"><i style="background:${inkColor(c)}"></i></button>`).join('');
   box.querySelectorAll('[data-color]').forEach(b => b.onclick = () => recolorSelection(b.dataset.color));
 }
 
@@ -892,6 +945,25 @@ $('#finger').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   S.finger = b.dataset.v; LS.set('finger', S.finger); syncSeg($('#finger'), S.finger);
 });
+$('#theme').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.theme = b.dataset.v; LS.set('theme', S.theme); applyTheme();
+});
+
+/* ---------- テーマ ---------- */
+const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  const dark = S.theme === 'dark' || (S.theme === 'auto' && !!mqDark && mqDark.matches);
+  T = dark ? THEMES.dark : THEMES.light;
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  $('meta[name="theme-color"]').content = dark ? '#1b1c20' : '#f6f7f9';
+  syncSeg($('#theme'), S.theme);
+  renderOptions();
+  if (S.sel) renderSelColors();
+  render();
+}
+if (mqDark) mqDark.addEventListener('change', () => { if (S.theme === 'auto') applyTheme(); });
+
 $('#pop-more').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   closePops();
@@ -947,11 +1019,12 @@ function exportPNG() {
   const cv = document.createElement('canvas');
   cv.width = Math.ceil(bw * scale); cv.height = Math.ceil(bh * scale);
   const c = cv.getContext('2d');
-  c.fillStyle = PAPER; c.fillRect(0, 0, cv.width, cv.height);
+  const L = THEMES.light; // 書き出しはいつも白い紙
+  c.fillStyle = L.paper; c.fillRect(0, 0, cv.width, cv.height);
   c.setTransform(scale, 0, 0, scale, -(b.x0 - pad) * scale, -(b.y0 - pad) * scale);
-  drawBg(c, { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad }, scale, S.board.bg);
+  drawBg(c, { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad }, scale, S.board.bg, L);
   c.lineCap = 'round'; c.lineJoin = 'round';
-  for (const st of S.strokes) drawStroke(c, st);
+  for (const st of S.strokes) drawStroke(c, st, L);
   cv.toBlob(blob => download(blob, safeName(S.board.name) + '.png'), 'image/png');
 }
 
@@ -1187,6 +1260,7 @@ $('#sync-out').onclick = () => {
 fillIcons();
 syncSeg($('#finger'), S.finger);
 setTool('pen');
+applyTheme();
 renderSync();
 window.addEventListener('resize', resize);
 resize();
@@ -1194,7 +1268,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=6').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=7').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 

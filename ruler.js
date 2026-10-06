@@ -323,18 +323,18 @@ function curveSnapMove(x, y, hint) {
    ========================================================= */
 function drawKnob(c, x, y) {
   c.beginPath(); c.arc(x, y, 18, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(255,255,255,.95)'; c.fill();
-  c.lineWidth = 1; c.strokeStyle = 'rgba(51,65,85,.5)'; c.stroke();
+  c.fillStyle = T.knobFill; c.fill();
+  c.lineWidth = 1; c.strokeStyle = T.knobLine; c.stroke();
   c.beginPath(); c.arc(x, y, 8, -Math.PI * 0.9, Math.PI * 0.4);
-  c.strokeStyle = '#334155'; c.lineWidth = 1.6; c.stroke();
+  c.strokeStyle = T.knobIcon; c.lineWidth = 1.6; c.stroke();
   const ex = x + 8 * Math.cos(Math.PI * 0.4), ey = y + 8 * Math.sin(Math.PI * 0.4);
   c.beginPath(); c.moveTo(ex - 4, ey - 1); c.lineTo(ex, ey); c.lineTo(ex + 1, ey - 4); c.stroke();
 }
 function drawGrip(c, x, y) {
   c.beginPath(); c.arc(x, y, 18, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(255,255,255,.95)'; c.fill();
-  c.lineWidth = 1; c.strokeStyle = 'rgba(51,65,85,.5)'; c.stroke();
-  c.strokeStyle = '#334155'; c.lineWidth = 1.6; c.lineCap = 'round'; c.lineJoin = 'round';
+  c.fillStyle = T.knobFill; c.fill();
+  c.lineWidth = 1; c.strokeStyle = T.knobLine; c.stroke();
+  c.strokeStyle = T.knobIcon; c.lineWidth = 1.6; c.lineCap = 'round'; c.lineJoin = 'round';
   c.beginPath();
   c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.moveTo(x, y - 9); c.lineTo(x, y + 9);
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -343,12 +343,12 @@ function drawGrip(c, x, y) {
   }
   c.stroke();
 }
-function drawPill(c, label, x, y, align, bg = 'rgba(31,35,40,.85)') {
+function drawPill(c, label, x, y, align, bg = T.pillBg, fg = T.pillText) {
   c.font = '600 13px system-ui, sans-serif';
   const tw = c.measureText(label).width + 16, x0 = align === 'left' ? x : x - tw / 2;
   c.fillStyle = bg;
   c.beginPath(); c.roundRect ? c.roundRect(x0, y - 12, tw, 24, 12) : c.rect(x0, y - 12, tw, 24); c.fill();
-  c.fillStyle = '#fff'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillStyle = fg; c.textAlign = 'center'; c.textBaseline = 'middle';
   c.fillText(label, x0 + tw / 2, y + 0.5);
 }
 // 目盛の間隔：1, 2, 5, 10, 20, 50 … のうち、画面で minPx 以上になる最小のもの
@@ -364,7 +364,7 @@ function drawFnRuler(c) {
   c.rotate(R.a);
   // 座標軸と目盛
   const tick = niceStep(su, 12), lab = niceStep(su, 30), N = Math.ceil(far / su / tick) * tick;
-  c.strokeStyle = 'rgba(51,65,85,.5)'; c.lineWidth = 1;
+  c.strokeStyle = T.axis; c.lineWidth = 1;
   c.beginPath();
   c.moveTo(-far, 0); c.lineTo(far, 0); c.moveTo(0, -far); c.lineTo(0, far);
   for (let i = -N; i <= N; i += tick) {
@@ -374,7 +374,7 @@ function drawFnRuler(c) {
     c.moveTo(-big, -i * su); c.lineTo(big, -i * su);
   }
   c.stroke();
-  c.fillStyle = 'rgba(51,65,85,.8)'; c.font = '11px system-ui, sans-serif';
+  c.fillStyle = T.rulerText; c.font = '11px system-ui, sans-serif';
   const L = Math.ceil(far / su / lab) * lab, fmt = i => String(i).replace('-', '−');
   c.textAlign = 'center'; c.textBaseline = 'top';
   for (let i = -L; i <= L; i += lab) if (i) c.fillText(fmt(i), i * su, 8);
@@ -383,7 +383,7 @@ function drawFnRuler(c) {
   // カーブ（薄い帯 = 吸着する範囲の目安）
   const segs = rulerCurve();
   c.lineCap = 'round'; c.lineJoin = 'round';
-  for (const [w, col] of [[CURVE_SNAP, 'rgba(37,99,235,.07)'], [2, 'rgba(37,99,235,.8)']]) {
+  for (const [w, col] of [[CURVE_SNAP, T.curveBand], [2, T.curve]]) {
     c.lineWidth = w; c.strokeStyle = col;
     c.beginPath();
     for (const P of segs) {
@@ -393,12 +393,12 @@ function drawFnRuler(c) {
     c.stroke();
   }
   // 原点、移動つまみ（十字矢印）、回転つまみ
-  c.beginPath(); c.arc(0, 0, 3, 0, Math.PI * 2); c.fillStyle = '#334155'; c.fill();
+  c.beginPath(); c.arc(0, 0, 3, 0, Math.PI * 2); c.fillStyle = T.knobIcon; c.fill();
   drawGrip(c, CURVE_GRIP.x, CURVE_GRIP.y);
   drawKnob(c, CURVE_KNOB.x, CURVE_KNOB.y);
   c.restore();
   const deg = rulerDeg();
-  if (compiled.err) drawPill(c, '式エラー：' + compiled.err, o.x + 18, o.y - 28, 'left', 'rgba(220,38,38,.9)');
+  if (compiled.err) drawPill(c, '式エラー：' + compiled.err, o.x + 18, o.y - 28, 'left', 'rgba(220,38,38,.92)', '#ffffff');
   else drawPill(c, prettyExpr(R.expr) + (deg ? `   ${deg}°` : ''), o.x + 18, o.y - 28, 'left');
 }
 
@@ -408,9 +408,9 @@ function drawRuler(c) {
   c.save();
   c.translate(o.x, o.y);
   c.rotate(r.a);
-  c.fillStyle = 'rgba(148,163,184,.22)';
+  c.fillStyle = T.rulerFill;
   c.fillRect(-L, -hw, L * 2, RULER_W);
-  c.strokeStyle = 'rgba(51,65,85,.55)'; c.lineWidth = 1;
+  c.strokeStyle = T.rulerLine; c.lineWidth = 1;
   c.beginPath();
   c.moveTo(-L, -hw); c.lineTo(L, -hw); c.moveTo(-L, hw); c.lineTo(L, hw);
   for (let x = -Math.floor(L / 10) * 10; x <= L; x += 10) {

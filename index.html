@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
@@ -7,10 +7,18 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Canvas Note</title>
+<script>
+  // 読み込み中に白く光らないよう、テーマを先に決める
+  try {
+    const t = JSON.parse(localStorage.getItem('theme') || '"auto"');
+    const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  } catch (e) {}
+</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -81,6 +89,12 @@
   <button class="mitem" data-act="export">バックアップを書き出し (JSON)</button>
   <button class="mitem" data-act="import">バックアップを読み込み</button>
   <hr>
+  <div class="pop-label">テーマ</div>
+  <div class="seg" id="theme">
+    <button data-v="auto">自動</button>
+    <button data-v="light">ライト</button>
+    <button data-v="dark">ダーク</button>
+  </div>
   <div class="pop-label">指で描く</div>
   <div class="seg" id="finger">
     <button data-v="auto">自動</button>
@@ -113,8 +127,8 @@
 <div id="toast" hidden></div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=6"></script>
-<script src="ruler.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="firebase-config.js?v=7"></script>
+<script src="ruler.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>
