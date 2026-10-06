@@ -105,6 +105,22 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   order: 2;
 }
 #options:empty { display: none; }
+#ruler-opts {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  max-width: 100%; overflow-x: auto; scrollbar-width: none;
+  order: 3;
+}
+#ruler-opts:empty { display: none; }
+.fld { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; flex: none; }
+.fld b { color: var(--text); min-width: 14px; text-align: center; }
+.fld input:not([type]) {
+  width: 54px; font: inherit; color: var(--text); padding: 4px 6px;
+  border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  -webkit-user-select: text; user-select: text;
+}
+.fld input[type=range] { width: 96px; accent-color: var(--accent); }
+.step { width: 26px; height: 26px; border-radius: 7px; background: rgba(0,0,0,.05); color: var(--text); }
+#ru-flip { font-size: 18px; }
 
 .swatches { display: flex; gap: 4px; align-items: center; }
 .sw {
@@ -176,6 +192,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 @media (max-width: 1000px) {
   #dock { top: auto; bottom: calc(10px + var(--safe-b)); }
   #options { order: 0; }
+  #ruler-opts { order: -1; }
   #topbar { max-width: calc(100vw - 170px); }
   #title { width: 160px; }
   #zoom { display: none; }  /* スマホはピンチで十分 */
