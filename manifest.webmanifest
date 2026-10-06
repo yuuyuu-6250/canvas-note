@@ -1,0 +1,11 @@
+{
+  "name": "Canvas Note",
+  "short_name": "Canvas Note",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#f6f7f9",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
