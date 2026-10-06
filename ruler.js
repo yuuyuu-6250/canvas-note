@@ -2,14 +2,17 @@
 /* =========================================================
    定規（app.js の後に読み込む。S, W, H, toScreen などを使う）
    - 直線定規：縁に沿ってまっすぐ描ける
-   - 関数定規：y = f(x) を自由に入力。カーブの近くから描くとカーブに沿う
+   - 関数定規：y = f(x) や x^2+y^2=9 のような式を自由に入力。カーブの近くから描くとカーブに沿う
    どちらもキャンバスに固定（スクロール・ズームで一緒に動く）
    ========================================================= */
 const CURVE_KNOB = { x: -80, y: 80 };  // 関数定規の回転つまみ（原点からの画面px）
 const CURVE_GRIP = { x: -80, y: -80 }; // 関数定規の移動つまみ（原点はカーブが通ることが多いので離す）
 const CURVE_SNAP = 30;                // カーブからこの距離（画面px）以内で描き始めると吸着
 const GRID_SNAP = 10;                 // 原点を方眼の交点に吸着させる距離（画面px）
-const FN_EXAMPLES = ['x^2', 'x^3-3x', '2x^2-4x+1', 'sqrt(x)', '1/x', 'log(x)', 'ln(x)', '2^x', 'sin(x)', 'abs(x)'];
+const FN_EXAMPLES = [
+  ['関数', ['x^2', 'x^3-3x', '2x^2-4x+1', 'sqrt(x)', '1/x', 'log(x)', 'ln(x)', '2^x', 'sin(x)', 'abs(x)']],
+  ['円・二次曲線', ['x^2+y^2=9', '(x-2)^2+(y-1)^2=4', 'x^2/9+y^2/4=1', 'x^2/4-y^2=1', 'xy=4', 'y^2=4x']],
+];
 
 /* ---------- 座標 ----------
    関数定規：(wx, wy) = 原点
@@ -97,7 +100,9 @@ function rulerProject(x, y, side) {
 
 /* =========================================================
    式の読み取り（eval は使わない）
-   使えるもの：+ - * / ^ ( )、2x のような掛け算の省略、
+   ・y = f(x) の形（「x^2」だけでも可）        → 関数のグラフ
+   ・x と y の方程式（x^2+y^2=9、y^2=4x など） → 円・楕円・双曲線などの曲線
+   使えるもの：+ - * / ^ ( ) =、2x のような掛け算の省略、
    sqrt √ cbrt abs |…| sin cos tan asin acos atan exp ln log(=log10) log2 log_b(x)、pi π e
    ========================================================= */
 const FN = {
@@ -106,11 +111,11 @@ const FN = {
   log: Math.log10, log10: Math.log10, log2: Math.log2,
 };
 const CONST = { pi: Math.PI, e: Math.E };
-const NAMES = [...Object.keys(FN), ...Object.keys(CONST), 'x'].sort((a, b) => b.length - a.length);
+const NAMES = [...Object.keys(FN), ...Object.keys(CONST), 'x', 'y'].sort((a, b) => b.length - a.length);
 
 function normalizeExpr(s) {
-  return String(s).toLowerCase().replace(/\s+/g, '').replace(/^y=/, '')
-    .replace(/[−–]/g, '-').replace(/[×·]/g, '*').replace(/÷/g, '/')
+  return String(s).toLowerCase().replace(/\s+/g, '')
+    .replace(/[−–]/g, '-').replace(/[×·]/g, '*').replace(/÷/g, '/').replace(/＝/g, '=')
     .replace(/π/g, 'pi').replace(/√/g, 'sqrt').replace(/²/g, '^2').replace(/³/g, '^3').replace(/｜/g, '|');
 }
 function tokenize(s) {
@@ -134,9 +139,11 @@ function tokenize(s) {
   }
   return t;
 }
-function compileExpr(src) {
-  const s = normalizeExpr(src);
-  if (!s) throw new Error('式を入れてください');
+const usesY = s => tokenize(s).some(t => t.k === 'id' && t.v === 'y');
+
+// 式（= を含まない片側）を (x, y) => 数 の関数にする
+function compileSide(s) {
+  if (!s) throw new Error('式が空です');
   const t = tokenize(s);
   let p = 0, absDepth = 0; // |…| の中では次の | は閉じかっこ
   const peek = () => t[p], next = () => t[p++];
@@ -151,7 +158,7 @@ function compileExpr(src) {
     let a = term();
     while (is('+') || is('-')) {
       const op = next().k, b = term(), l = a;
-      a = op === '+' ? x => l(x) + b(x) : x => l(x) - b(x);
+      a = op === '+' ? (x, y) => l(x, y) + b(x, y) : (x, y) => l(x, y) - b(x, y);
     }
     return a;
   }
@@ -162,15 +169,15 @@ function compileExpr(src) {
       if (tk && (tk.k === '*' || tk.k === '/')) {
         next();
         const b = unary(), l = a;
-        a = tk.k === '*' ? x => l(x) * b(x) : x => l(x) / b(x);
-      } else if (startsPrimary(tk)) { // 2x, x(x+1) などの省略された掛け算
+        a = tk.k === '*' ? (x, y) => l(x, y) * b(x, y) : (x, y) => l(x, y) / b(x, y);
+      } else if (startsPrimary(tk)) { // 2x, x(x+1), xy などの省略された掛け算
         const b = power(), l = a;
-        a = x => l(x) * b(x);
+        a = (x, y) => l(x, y) * b(x, y);
       } else return a;
     }
   }
   function unary() {
-    if (is('-')) { next(); const a = unary(); return x => -a(x); }
+    if (is('-')) { next(); const a = unary(); return (x, y) => -a(x, y); }
     if (is('+')) { next(); return unary(); }
     return power();
   }
@@ -179,7 +186,7 @@ function compileExpr(src) {
     if (!is('^')) return b;
     next();
     const e = unary();
-    return x => Math.pow(b(x), e(x));
+    return (x, y) => Math.pow(b(x, y), e(x, y));
   }
   function fnArg() {
     if (is('(')) { next(); const a = expr(); expect(')'); return a; }
@@ -195,18 +202,19 @@ function compileExpr(src) {
       const a = expr();
       expect('|');
       absDepth--;
-      return x => Math.abs(a(x));
+      return (x, y) => Math.abs(a(x, y));
     }
     if (tk.k === 'id') {
       if (tk.v === 'x') return x => x;
+      if (tk.v === 'y') return (x, y) => y;
       if (tk.v in CONST) { const v = CONST[tk.v]; return () => v; }
       if (tk.v === 'log' && is('_')) { // log_2(x)
         next();
         const b = primary(), arg = fnArg();
-        return x => Math.log(arg(x)) / Math.log(b(x));
+        return (x, y) => Math.log(arg(x, y)) / Math.log(b(x, y));
       }
       const f = FN[tk.v], arg = fnArg();
-      return x => f(arg(x));
+      return (x, y) => f(arg(x, y));
     }
     throw new Error('式が正しくありません');
   }
@@ -216,47 +224,82 @@ function compileExpr(src) {
   return f;
 }
 
-const SUPS = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻' };
-const toSup = s => [...s].map(c => SUPS[c]).join('');
-function prettyExpr(src) {
-  return 'y = ' + normalizeExpr(src)
-    .replace(/\^\((-?\d+)\)/g, (_, d) => toSup(d))
-    .replace(/\^(-?\d+)(?![.\d])/g, (_, d) => toSup(d))
-    .replace(/sqrt/g, '√').replace(/pi/g, 'π').replace(/\*/g, '·')
-    .replace(/([^(+*/^-])-/g, '$1 − ').replace(/-/g, '−').replace(/\+/g, ' + ');
+// 定規の式を読む → { kind: 'fn', f(x) } または { kind: 'implicit', F(x, y) }（F = 0 が曲線）
+function parseRulerExpr(src) {
+  const s = normalizeExpr(src);
+  if (!s) throw new Error('式を入れてください');
+  const parts = s.split('=');
+  if (parts.length > 2) throw new Error('「=」は1つだけにしてください');
+  if (parts.length === 1) {
+    const f = compileSide(s);
+    return usesY(s) ? { kind: 'implicit', F: f } : { kind: 'fn', f: x => f(x, 0) };
+  }
+  const [L, R] = parts;
+  if (!L || !R) throw new Error('「=」の両側に式を書いてください');
+  const fl = compileSide(L), fr = compileSide(R);
+  if (L === 'y' && !usesY(R)) return { kind: 'fn', f: x => fr(x, 0) };
+  return { kind: 'implicit', F: (x, y) => fl(x, y) - fr(x, y) };
+}
+// y = f(x) の形の式の f（テストや旧データ用）
+function compileExpr(src) {
+  const c = parseRulerExpr(src);
+  if (c.kind !== 'fn') throw new Error('y = f(x) の形ではありません');
+  return c.f;
 }
 
-let compiled = { src: null, f: null, err: '' };
-function rulerFn() {
+const SUPS = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '-': '⁻' };
+const toSup = s => [...s].map(c => SUPS[c]).join('');
+const prettySide = s => s
+  .replace(/\^\((-?\d+)\)/g, (_, d) => toSup(d))
+  .replace(/\^(-?\d+)(?![.\d])/g, (_, d) => toSup(d))
+  .replace(/sqrt/g, '√').replace(/pi/g, 'π').replace(/\*/g, '·')
+  .replace(/([^(+*/^-])-/g, '$1 − ').replace(/-/g, '−').replace(/\+/g, ' + ');
+function prettyExpr(src) {
+  const s = normalizeExpr(src), parts = s.split('=');
+  if (parts.length === 2) return prettySide(parts[0]) + ' = ' + prettySide(parts[1]);
+  let hasY = false;
+  try { hasY = usesY(s); } catch {}
+  return hasY ? prettySide(s) + ' = 0' : 'y = ' + prettySide(s);
+}
+
+let compiled = { src: null, c: null, err: '' };
+function rulerParsed() {
   const src = S.ruler.expr;
   if (compiled.src !== src) {
-    try { compiled = { src, f: compileExpr(src), err: '' }; }
-    catch (e) { compiled = { src, f: null, err: e.message }; }
+    try { compiled = { src, c: parseRulerExpr(src), err: '' }; }
+    catch (e) { compiled = { src, c: null, err: e.message }; }
   }
-  return compiled.f;
+  return compiled.c;
 }
 
 /* =========================================================
-   カーブの計算
-   定規の単位（1目盛 = 1）で、画面上で約1.5pxおきの点にする。
-   定義域の端（√x の 0 など）は二分法で詰め、漸近線（1/x など）では線を切る。
+   カーブの計算（定規の単位 1目盛 = 1 で計算し、キャッシュする）
+   ・y = f(x)：画面上で約1.5pxおきに点を打つ。定義域の端（√x の 0 など）は
+     二分法で詰め、漸近線（1/x など）では線を切る。
+   ・方程式 F(x, y) = 0：画面を約5pxのマス目に分け、F の符号が変わる所を
+     つないで線にし（マーチングスクエア）、各点をニュートン法で曲線上に寄せる。
    ========================================================= */
-let curveCache = { key: '', segs: [] };
+let curveCache = { key: '', expr: null, segs: [] };
 function rulerCurve() {
-  const R = S.ruler, f = rulerFn();
-  if (!f) return [];
+  const R = S.ruler, c = rulerParsed();
+  if (!c) return [];
+  // ピンチ中は作り直さない（単位系で持っているので形はそのまま正しい）
+  if (act && act.type === 'pinch' && curveCache.expr === R.expr) return curveCache.segs;
   const su = R.unit * S.view.s, o = rulerOrigin();
   const far = Math.max(Math.hypot(o.x, o.y), Math.hypot(W - o.x, o.y), Math.hypot(o.x, H - o.y), Math.hypot(W - o.x, H - o.y));
   const zb = Math.round(Math.log2(su) * 4), ub = Math.ceil(Math.log2(far / su + 2) * 2);
   const key = [R.expr, zb, ub].join('|');
   if (curveCache.key === key) return curveCache.segs;
+  const U = Math.pow(2, ub / 2), suB = Math.pow(2, zb / 4);
+  const segs = c.kind === 'fn' ? sampleFn(c.f, U, 1.5 / suB) : traceImplicit(c.F, U, 5 / suB);
+  curveCache = { key, expr: R.expr, segs };
+  return segs;
+}
 
-  const U = Math.pow(2, ub / 2);            // x の範囲（±U）と y の上限
-  const px = 1.5 / Math.pow(2, zb / 4);     // 1.5 画面px を単位に換算
+function sampleFn(f, U, px) {
   const maxStep = px * 4;
   const val = u => { const v = f(u); return Number.isFinite(v) && Math.abs(v) <= U ? v : NaN; };
   const edge = (a, b) => { for (let i = 0; i < 50; i++) { const m = (a + b) / 2; if (Number.isFinite(val(m))) a = m; else b = m; } return a; };
-
   const segs = [];
   let cur = [];
   const brk = () => { if (cur.length >= 4) segs.push(cur); cur = []; };
@@ -281,7 +324,100 @@ function rulerCurve() {
     u += clamp(du, 1e-9 * Math.max(1, Math.abs(u)), maxStep);
   }
   brk();
-  curveCache = { key, segs };
+  return segs;
+}
+
+// (u, v) の近くの、F = 0 の上の点。曲線上と言えなければ null（1/x のような符号の飛びを除く）
+function refineOnCurve(F, u, v, h) {
+  const grad = (x, y, f) => {
+    const e = 1e-7 * (1 + Math.abs(x) + Math.abs(y));
+    return [(F(x + e, y) - f) / e, (F(x, y + e) - f) / e];
+  };
+  let x = u, y = v;
+  for (let k = 0; k < 4; k++) {
+    const f = F(x, y);
+    if (!Number.isFinite(f)) break;
+    const [gx, gy] = grad(x, y, f), g2 = gx * gx + gy * gy;
+    if (!(g2 > 0) || !Number.isFinite(g2)) break;
+    const nx = x - f * gx / g2, ny = y - f * gy / g2;
+    if (Math.hypot(nx - u, ny - v) > h * 1.5) break;
+    x = nx; y = ny;
+  }
+  const f = F(x, y);
+  if (!Number.isFinite(f)) return null;
+  const [gx, gy] = grad(x, y, f), g = Math.hypot(gx, gy);
+  return Math.abs(f) <= g * h * 0.5 ? [x, y] : null;
+}
+
+function traceImplicit(F, U, cell) {
+  const n = Math.min(Math.ceil(2 * U / cell), 900), h = 2 * U / n, N1 = n + 1;
+  const val = new Float64Array(N1 * N1);
+  for (let j = 0; j <= n; j++) {
+    const y = -U + j * h;
+    for (let i = 0; i <= n; i++) val[j * N1 + i] = F(-U + i * h, y);
+  }
+  // 辺ごとの交点（辺の番号：横の辺 = 頂点番号*2、縦の辺 = 頂点番号*2+1）
+  const pts = new Map();
+  const edgePoint = id => {
+    if (pts.has(id)) return pts.get(id);
+    const k = id >> 1, i = k % N1, j = (k - i) / N1, vert = id & 1;
+    const a = val[k], b = vert ? val[k + N1] : val[k + 1], t = a / (a - b);
+    const p = refineOnCurve(F, -U + (i + (vert ? 0 : t)) * h, -U + (j + (vert ? t : 0)) * h, h);
+    pts.set(id, p);
+    return p;
+  };
+  // マスごとの線分（どの辺とどの辺を結ぶか）
+  const pairs = [];
+  const add = (e1, e2) => { if (edgePoint(e1) && edgePoint(e2)) pairs.push([e1, e2]); };
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const k = j * N1 + i;
+    const a = val[k], b = val[k + 1], c = val[k + N1 + 1], d = val[k + N1]; // 左下, 右下, 右上, 左上
+    if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d))) continue;
+    const idx = (a > 0) | ((b > 0) << 1) | ((c > 0) << 2) | ((d > 0) << 3);
+    if (idx === 0 || idx === 15) continue;
+    const B = k * 2, Rt = (k + 1) * 2 + 1, Tp = (k + N1) * 2, L = k * 2 + 1;
+    switch (idx) {
+      case 1: case 14: add(L, B); break;
+      case 2: case 13: add(B, Rt); break;
+      case 3: case 12: add(L, Rt); break;
+      case 4: case 11: add(Rt, Tp); break;
+      case 6: case 9: add(B, Tp); break;
+      case 7: case 8: add(L, Tp); break;
+      case 5: if ((a + b + c + d) / 4 > 0) { add(B, Rt); add(L, Tp); } else { add(L, B); add(Rt, Tp); } break;
+      case 10: if ((a + b + c + d) / 4 > 0) { add(L, B); add(Rt, Tp); } else { add(B, Rt); add(L, Tp); } break;
+    }
+  }
+  // 線分をつないで折れ線にする（各辺は高々2つの線分で共有される）
+  const adj = new Map();
+  pairs.forEach(([e1, e2], s) => {
+    for (const e of [e1, e2]) { const l = adj.get(e); l ? l.push(s) : adj.set(e, [s]); }
+  });
+  const used = new Uint8Array(pairs.length);
+  const walk = (start, from) => {
+    const out = [];
+    let e = start;
+    for (;;) {
+      const s = (adj.get(e) || []).find(q => !used[q]);
+      if (s === undefined) return out;
+      used[s] = 1;
+      e = pairs[s][0] === e ? pairs[s][1] : pairs[s][0];
+      out.push(e);
+      if (e === from) return out;
+    }
+  };
+  const segs = [];
+  for (let s = 0; s < pairs.length; s++) {
+    if (used[s]) continue;
+    used[s] = 1;
+    const [e0, e1] = pairs[s];
+    const fwd = walk(e1, e0);
+    const closed = fwd.length > 0 && fwd[fwd.length - 1] === e0;
+    const back = closed ? [] : walk(e0, null);
+    const chain = [...back.reverse(), e0, e1, ...fwd];
+    const P = [];
+    for (const e of chain) { const p = pts.get(e); P.push(p[0], p[1]); }
+    if (P.length >= 4) { if (closed) P.closed = true; segs.push(P); }
+  }
   return segs;
 }
 
@@ -290,20 +426,19 @@ function nearestOnCurve(lx, ly, hint) {
   const segs = rulerCurve(), su = S.ruler.unit * S.view.s;
   const qu = lx / su, qv = -ly / su;
   let best = { d: Infinity };
-  const scan = (s, i0, i1) => {
+  const one = (s, i) => {
     const P = segs[s];
-    for (let i = i0; i < i1; i++) {
-      const au = P[i * 2], av = P[i * 2 + 1], du = P[i * 2 + 2] - au, dv = P[i * 2 + 3] - av;
-      const l = du * du + dv * dv;
-      const t = l ? clamp(((qu - au) * du + (qv - av) * dv) / l, 0, 1) : 0;
-      const u = au + du * t, v = av + dv * t, d = Math.hypot(qu - u, qv - v) * su;
-      if (d < best.d) best = { d, u, v, s, i };
-    }
+    const au = P[i * 2], av = P[i * 2 + 1], du = P[i * 2 + 2] - au, dv = P[i * 2 + 3] - av;
+    const l = du * du + dv * dv;
+    const t = l ? clamp(((qu - au) * du + (qv - av) * dv) / l, 0, 1) : 0;
+    const u = au + du * t, v = av + dv * t, d = Math.hypot(qu - u, qv - v) * su;
+    if (d < best.d) best = { d, u, v, s, i };
   };
-  if (hint && segs[hint.s] && hint.i < segs[hint.s].length / 2) {
-    const n = segs[hint.s].length / 2;
-    scan(hint.s, Math.max(0, hint.i - 150), Math.min(n - 1, hint.i + 150));
-  } else segs.forEach((P, s) => scan(s, 0, P.length / 2 - 1));
+  if (hint && segs[hint.s] && hint.i < segs[hint.s].length / 2 - 1) {
+    const P = segs[hint.s], m = P.length / 2 - 1; // 線分の数
+    if (P.closed) for (let k = -150; k <= 150; k++) one(hint.s, (((hint.i + k) % m) + m) % m); // 円などは一周つながる
+    else for (let i = Math.max(0, hint.i - 150); i < Math.min(m, hint.i + 150); i++) one(hint.s, i);
+  } else segs.forEach((P, s) => { for (let i = 0; i < P.length / 2 - 1; i++) one(s, i); });
   return best;
 }
 function curveSnapStart(x, y) {
@@ -467,8 +602,8 @@ function renderRulerOpts() {
   let h = `<div class="seg" id="ru-type"><button data-v="line" class="${R.type === 'line' ? 'active' : ''}">直線</button><button data-v="fn" class="${R.type === 'fn' ? 'active' : ''}">関数</button></div>`;
   if (R.type === 'fn') {
     h += `<span class="sep"></span>
-      <label class="fld">y =<input id="ru-expr" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done"></label>
-      <select id="ru-ex" title="例から選ぶ"><option value="">例</option>${FN_EXAMPLES.map(e => `<option value="${e}">${prettyExpr(e).slice(4)}</option>`).join('')}</select>
+      <label class="fld">式<input id="ru-expr" placeholder="x^2 や x^2+y^2=9" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done"></label>
+      <select id="ru-ex" title="例から選ぶ"><option value="">例</option>${FN_EXAMPLES.map(([g, list]) => `<optgroup label="${g}">${list.map(e => `<option value="${e}">${prettyExpr(e)}</option>`).join('')}</optgroup>`).join('')}</select>
       <span class="sep"></span>
       <span class="fld">1目盛<button class="step" data-d="0.5" title="小さく">−</button><b id="ru-unit">${unitLabel()}</b><button class="step" data-d="2" title="大きく">+</button></span>`;
   }
@@ -488,7 +623,7 @@ function renderRulerOpts() {
   let timer = 0;
   const apply = showError => {
     try {
-      compileExpr(input.value);
+      parseRulerExpr(input.value);
       input.classList.remove('bad');
       R.expr = input.value.trim(); saveRulerCfg(); renderOverSoon();
     } catch (e) {

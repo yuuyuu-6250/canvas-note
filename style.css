@@ -149,7 +149,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   -webkit-user-select: text; user-select: text;
 }
 .fld input.bad { border-color: var(--danger); background: var(--bad-bg); }
-#ru-expr { width: 170px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+#ru-expr { width: 190px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
 #ru-ex {
   font: inherit; color: var(--text); padding: 4px 6px; flex: none;
   border: 1px solid var(--line); border-radius: 7px; background: var(--surface);
