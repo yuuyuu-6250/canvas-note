@@ -196,6 +196,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .pop[hidden] { display: none; }
 .pop-label { font-size: 12px; color: var(--muted); margin: 6px 2px 6px; }
 .pop-label:first-child { margin-top: 0; }
+#bg-strength { width: 100%; accent-color: var(--accent); margin: 2px 0 0; }
 .pop hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
 .pop .hint { font-size: 12px; color: var(--muted); margin: 8px 2px 0; max-width: 280px; }
 .mitem { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 8px; }

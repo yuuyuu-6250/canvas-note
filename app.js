@@ -48,14 +48,14 @@ const ERASER_SIZES = [8, 16, 32];
 // キャンバスに描く色（テーマごと）
 const THEMES = {
   light: {
-    paper: '#ffffff', bgLine: '#e3e7ee', bgMajor: '#cfd5df', bgDot: '#c4cad4', hlAlpha: 0.42,
+    paper: '#ffffff', bgInk: '#64748b', bgK: 1, hlAlpha: 0.42,
     accent: '#2563eb', accentSoft: 'rgba(37,99,235,.06)', eraserFill: 'rgba(255,255,255,.5)', eraserLine: 'rgba(0,0,0,.45)',
     rulerFill: 'rgba(148,163,184,.22)', rulerLine: 'rgba(51,65,85,.55)', rulerText: 'rgba(51,65,85,.8)', axis: 'rgba(51,65,85,.5)',
     knobFill: 'rgba(255,255,255,.95)', knobLine: 'rgba(51,65,85,.5)', knobIcon: '#334155',
     curve: 'rgba(37,99,235,.8)', curveBand: 'rgba(37,99,235,.07)', pillBg: 'rgba(31,35,40,.85)', pillText: '#ffffff',
   },
   dark: {
-    paper: '#1b1c20', bgLine: '#2a2d34', bgMajor: '#393d46', bgDot: '#4a4f5a', hlAlpha: 0.5,
+    paper: '#1b1c20', bgInk: '#cbd5e1', bgK: 0.55, hlAlpha: 0.5,
     accent: '#60a5fa', accentSoft: 'rgba(96,165,250,.08)', eraserFill: 'rgba(255,255,255,.1)', eraserLine: 'rgba(255,255,255,.55)',
     rulerFill: 'rgba(148,163,184,.14)', rulerLine: 'rgba(203,213,225,.5)', rulerText: 'rgba(203,213,225,.85)', axis: 'rgba(203,213,225,.45)',
     knobFill: 'rgba(44,46,53,.95)', knobLine: 'rgba(203,213,225,.4)', knobIcon: '#cbd5e1',
@@ -63,6 +63,20 @@ const THEMES = {
   },
 };
 let T = THEMES.light;
+const BG_STRENGTH = 0.25; // 背景の線の濃さ（0〜1）の初期値
+
+// 2色を a : (1 - a) で混ぜる（#rrggbb どうし）
+const mixCache = new Map();
+function mixColor(c1, c2, a) {
+  const key = c1 + c2 + a.toFixed(3);
+  let v = mixCache.get(key);
+  if (!v) {
+    const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)), A = p(c1), B = p(c2);
+    v = '#' + A.map((x, i) => Math.round(x + (B[i] - x) * a).toString(16).padStart(2, '0')).join('');
+    mixCache.set(key, v);
+  }
+  return v;
+}
 
 // ダークでは、保存した色はそのままに、暗い色（黒など）を明るくして表示する
 const inkCache = new Map();
@@ -176,28 +190,74 @@ function buildPath(p, from, to) {
   return path;
 }
 
-// 筆圧がある線は、太さが同じ区間ごとにまとめて描く
+// 太さが一定の線（筆圧なし・マーカー・点）
 function runs(st) {
   const g = G(st);
   if (g.runs) return g.runs;
-  const n = st.p.length / 3, out = [];
-  if (!st.pr || n < 2) {
-    out.push({ w: st.w, path: buildPath(st.p, 0, n - 1) });
-  } else {
-    const q = Math.max(0.2, st.w * 0.1);
-    const wq = i => Math.max(q, Math.round(pressureWidth(st.w, (st.p[i * 3 + 2] + st.p[i * 3 + 5]) / 2) / q) * q);
-    let start = 0, cw = wq(0);
-    for (let i = 1; i < n - 1; i++) {
-      const w = wq(i);
-      if (w !== cw) { out.push({ w: cw, path: buildPath(st.p, start, i) }); start = i; cw = w; }
-    }
-    out.push({ w: cw, path: buildPath(st.p, start, n - 1) });
+  const n = st.p.length / 3;
+  const w = st.pr ? pressureWidth(st.w, st.p[2]) : st.w; // 筆圧ありの1点だけの線
+  return g.runs = [{ w, path: buildPath(st.p, 0, n - 1) }];
+}
+
+// 筆圧のある線：各点の太さを前後となじませ、線の両側の輪郭を1つの形として塗る
+// （太さが段差なく連続して変わる）。両端と鋭く曲がる所には丸を足す
+function pressureShape(st) {
+  const g = G(st);
+  if (g.shape) return g.shape;
+  // 同じ位置の点を除く
+  const src = st.p, xs = [], ys = [], ps = [];
+  for (let i = 0; i < src.length; i += 3) {
+    const k = xs.length - 1;
+    if (k >= 0 && Math.hypot(src[i] - xs[k], src[i + 1] - ys[k]) < 1e-6) continue;
+    xs.push(src[i]); ys.push(src[i + 1]); ps.push(src[i + 2]);
   }
-  return g.runs = out;
+  const n = xs.length;
+  let r = ps.map(pr => pressureWidth(st.w, pr) / 2);
+  for (let pass = 0; pass < 4; pass++) { // 筆圧のゆらぎをならす
+    const q = r.slice();
+    for (let i = 1; i < n - 1; i++) q[i] = (r[i - 1] + 2 * r[i] + r[i + 1]) / 4;
+    r = q;
+  }
+  const body = new Path2D(), caps = new Path2D();
+  const circle = (i) => { caps.moveTo(xs[i] + r[i], ys[i]); caps.arc(xs[i], ys[i], r[i], 0, Math.PI * 2); };
+  if (n < 2) { circle(0); return g.shape = { body, caps }; }
+  // 鋭い角で区切る（角をまたいで輪郭を作ると、角の所がくびれるため）
+  const cuts = [0];
+  for (let i = 1; i < n - 1; i++) {
+    const ax = xs[i] - xs[i - 1], ay = ys[i] - ys[i - 1], bx = xs[i + 1] - xs[i], by = ys[i + 1] - ys[i];
+    if ((ax * bx + ay * by) / (Math.hypot(ax, ay) * Math.hypot(bx, by)) < 0.8) cuts.push(i);
+  }
+  cuts.push(n - 1);
+  const nx = new Float64Array(n), ny = new Float64Array(n);
+  for (let c = 0; c + 1 < cuts.length; c++) {
+    const s = cuts[c], e = cuts[c + 1];
+    // 区間内の各点の向き（前後の点から。区間の端は片側だけ）と、その法線
+    for (let i = s; i <= e; i++) {
+      const a = Math.max(s, i - 1), b = Math.min(e, i + 1);
+      let dx = xs[b] - xs[a], dy = ys[b] - ys[a], L = Math.hypot(dx, dy);
+      if (L < 1e-9) { dx = 1; dy = 0; L = 1; }
+      nx[i] = -dy / L; ny[i] = dx / L;
+    }
+    body.moveTo(xs[s] + nx[s] * r[s], ys[s] + ny[s] * r[s]);
+    for (let i = s + 1; i <= e; i++) body.lineTo(xs[i] + nx[i] * r[i], ys[i] + ny[i] * r[i]);
+    for (let i = e; i >= s; i--) body.lineTo(xs[i] - nx[i] * r[i], ys[i] - ny[i] * r[i]);
+    body.closePath();
+  }
+  // 両端と角に丸（区間どうしのつなぎ目も覆う）
+  for (const i of cuts) circle(i);
+  return g.shape = { body, caps };
 }
 
 function drawStroke(c, st, th = T) {
-  c.strokeStyle = inkColor(st.c, th);
+  const col = inkColor(st.c, th);
+  if (st.pr && st.p.length >= 6) {
+    const s = pressureShape(st);
+    c.fillStyle = col;
+    c.fill(s.body); // 輪郭と丸は別々に塗る（向きの違う形が重なって穴があかないように）
+    c.fill(s.caps);
+    return;
+  }
+  c.strokeStyle = col;
   if (st.t === 'hl') {
     c.globalAlpha = th.hlAlpha;
     if (th === THEMES.dark) c.globalCompositeOperation = 'screen'; // 暗い紙の上では光るように重ねる
@@ -214,15 +274,18 @@ function drawBg(c, r, scale, bg, th = T) {
   while (s * scale < 8) s *= 2;
   const lw = 1 / scale;
   const x0 = Math.floor(r.x0 / s) * s, y0 = Math.floor(r.y0 / s) * s;
+  // 濃さ（0〜1）から、紙の色と線の色を混ぜた色を作る（透明度だと交点が濃くなるので使わない）
+  const a = (0.04 + 0.6 * (bg.strength ?? BG_STRENGTH)) * th.bgK;
+  const line = mixColor(th.paper, th.bgInk, a), major = mixColor(th.paper, th.bgInk, Math.min(1, a * 1.7));
   if (bg.type === 'dots') {
-    c.fillStyle = th.bgDot;
+    c.fillStyle = mixColor(th.paper, th.bgInk, Math.min(1, a * 2.2));
     const d = 2.2 / scale;
     for (let x = x0; x <= r.x1; x += s)
       for (let y = y0; y <= r.y1; y += s) c.fillRect(x - d / 2, y - d / 2, d, d);
     return;
   }
   c.lineWidth = lw;
-  c.strokeStyle = th.bgLine;
+  c.strokeStyle = line;
   c.beginPath();
   if (bg.type === 'grid') for (let x = x0; x <= r.x1; x += s) { c.moveTo(x, r.y0); c.lineTo(x, r.y1); }
   for (let y = y0; y <= r.y1; y += s) { c.moveTo(r.x0, y); c.lineTo(r.x1, y); }
@@ -231,7 +294,7 @@ function drawBg(c, r, scale, bg, th = T) {
     // 4マスごとに少し濃い線
     const M = s * 4;
     const mx0 = Math.floor(r.x0 / M) * M, my0 = Math.floor(r.y0 / M) * M;
-    c.strokeStyle = th.bgMajor;
+    c.strokeStyle = major;
     c.beginPath();
     for (let x = mx0; x <= r.x1; x += M) { c.moveTo(x, r.y0); c.lineTo(x, r.y1); }
     for (let y = my0; y <= r.y1; y += M) { c.moveTo(r.x0, y); c.lineTo(r.x1, y); }
@@ -1048,7 +1111,15 @@ document.addEventListener('pointerdown', e => {
 }, true);
 
 function syncSeg(el, value) { el.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === String(value))); }
-function syncBgUI() { syncSeg($('#bg-type'), S.board.bg.type); syncSeg($('#bg-size'), S.board.bg.size); }
+function syncBgUI() {
+  syncSeg($('#bg-type'), S.board.bg.type); syncSeg($('#bg-size'), S.board.bg.size);
+  $('#bg-strength').value = Math.round((S.board.bg.strength ?? BG_STRENGTH) * 100);
+}
+// 濃さ：動かしている間は表示だけ、離したら保存
+$('#bg-strength').addEventListener('input', e => {
+  S.board.bg = { ...S.board.bg, strength: +e.target.value / 100 }; renderMainSoon();
+});
+$('#bg-strength').addEventListener('change', () => { LS.set('lastBg', S.board.bg); changed(); });
 
 $('#bg-type').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -1385,7 +1456,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=10').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=11').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
