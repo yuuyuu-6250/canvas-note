@@ -1068,6 +1068,7 @@ function renderOptions() {
         const d = Math.round(4 + (w / maxW) * 14);
         return `<button class="wd ${w === cfg.width ? 'active' : ''}" data-width="${w}" title="太さ ${w}"><i style="width:${d}px;height:${d}px"></i></button>`;
       }).join('')
+      + sizeSliderHTML(cfg.width, SIZE_RANGE[t])
       + (t === 'pen'
         ? `<span class="sep"></span><button class="toggle ${S.pen.pressure !== false ? 'active' : ''}" id="pen-pr" title="ペン（Surface ペン、Apple Pencil など）の筆圧で太さを変える">筆圧 ${S.pen.pressure !== false ? 'オン' : 'オフ'}</button>`
         : '');
@@ -1077,13 +1078,39 @@ function renderOptions() {
     box.querySelector('input[type=color]').oninput = e => { cfg.color = e.target.value; saveToolPrefs(); };
     box.querySelector('input[type=color]').onchange = () => renderOptions();
     box.querySelectorAll('[data-width]').forEach(b => b.onclick = () => { cfg.width = +b.dataset.width; saveToolPrefs(); renderOptions(); });
+    bindSizeSlider(box, SIZE_RANGE[t], v => { cfg.width = v; });
   } else if (t === 'eraser') {
     const er = S.eraser;
     box.innerHTML = `<div class="seg" id="er-mode"><button data-v="object" class="${er.mode === 'object' ? 'active' : ''}">オブジェクト</button><button data-v="partial" class="${er.mode === 'partial' ? 'active' : ''}">部分</button></div><span class="sep"></span>`
-      + ERASER_SIZES.map(s => `<button class="wd ${s === er.size ? 'active' : ''}" data-size="${s}" title="大きさ ${s}"><i style="width:${s / 2 + 4}px;height:${s / 2 + 4}px;background:none;border:1.5px solid currentColor"></i></button>`).join('');
+      + ERASER_SIZES.map(s => `<button class="wd ${s === er.size ? 'active' : ''}" data-size="${s}" title="大きさ ${s}"><i style="width:${s / 2 + 4}px;height:${s / 2 + 4}px;background:none;border:1.5px solid currentColor"></i></button>`).join('')
+      + sizeSliderHTML(er.size, SIZE_RANGE.eraser);
     box.querySelectorAll('#er-mode button').forEach(b => b.onclick = () => { er.mode = b.dataset.v; saveToolPrefs(); renderOptions(); });
     box.querySelectorAll('[data-size]').forEach(b => b.onclick = () => { er.size = +b.dataset.size; saveToolPrefs(); renderOptions(); });
+    bindSizeSlider(box, SIZE_RANGE.eraser, v => { er.size = v; renderOverSoon(); });
   } else box.innerHTML = '';
+}
+
+/* ---------- 太さのスライダー ----------
+   細い線ほど細かく選べるように、目盛りは等間隔ではなく倍率（対数）で並べる */
+const SIZE_RANGE = { pen: [0.5, 30], hl: [4, 60], eraser: [4, 80] };
+const toSlider = (v, [a, b]) => Math.round(Math.log(v / a) / Math.log(b / a) * 1000);
+const fromSlider = (s, [a, b]) => {
+  const v = a * Math.pow(b / a, s / 1000);
+  return v < 10 ? Math.round(v * 10) / 10 : Math.round(v * 2) / 2;
+};
+const fmtSize = v => String(+v.toFixed(1));
+function sizeSliderHTML(v, range) {
+  return `<span class="sep"></span><input type="range" class="wslider" min="0" max="1000" value="${toSlider(clamp(v, range[0], range[1]), range)}" aria-label="太さ"><span class="wval">${fmtSize(v)}</span>`;
+}
+function bindSizeSlider(box, range, set) {
+  const sl = box.querySelector('.wslider'), lab = box.querySelector('.wval');
+  sl.oninput = () => {
+    const v = fromSlider(+sl.value, range);
+    set(v);
+    lab.textContent = fmtSize(v);
+    box.querySelectorAll('.wd').forEach(b => b.classList.toggle('active', +(b.dataset.width || b.dataset.size) === v));
+  };
+  sl.onchange = saveToolPrefs;
 }
 function saveToolPrefs() { LS.set('pen', S.pen); LS.set('hl', S.hl); LS.set('eraser', S.eraser); }
 
@@ -1456,7 +1483,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=11').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=12').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 

@@ -176,6 +176,14 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .wd.active { background: var(--accent-soft); }
 .wd.active i { background: var(--accent); }
 
+.wslider { width: 110px; flex: none; accent-color: var(--accent); }
+.wval { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); flex: none; }
+@media (max-width: 520px) {
+  /* スマホ：色・太さ・スライダーが1列に収まらないので折り返す */
+  #options { flex-wrap: wrap; justify-content: center; row-gap: 2px; }
+  #options .sep { display: none; }
+  .wslider { width: 150px; }
+}
 .toggle {
   flex: none; white-space: nowrap; padding: 5px 10px; border-radius: 8px;
   background: var(--hover); color: var(--muted);
