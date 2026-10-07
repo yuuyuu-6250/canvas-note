@@ -43,7 +43,7 @@ function rulerToScreen(lx, ly) {
 // 方眼に吸着させながら動かす
 function moveRulerTo(wx, wy) {
   const g = gridStep(), R = S.ruler, near = v => Math.round(v / g) * g;
-  if (g && R.type === 'fn') {
+  if (g && R.type !== 'line') {
     // 原点を方眼の交点に
     const sx = near(wx), sy = near(wy);
     if (Math.hypot(sx - wx, sy - wy) * S.view.s <= GRID_SNAP) { wx = sx; wy = sy; }
@@ -77,7 +77,7 @@ function rulerDeg() {
 function rulerHit(x, y) {
   if (!S.ruler.on) return null;
   const { lx, ly } = rulerLocal(x, y);
-  if (S.ruler.type === 'fn') {
+  if (S.ruler.type !== 'line') {
     if (Math.hypot(lx - CURVE_KNOB.x, ly - CURVE_KNOB.y) <= 22) return 'knob';
     if (Math.hypot(lx - CURVE_GRIP.x, ly - CURVE_GRIP.y) <= 22) return 'body';
     return null;
@@ -111,7 +111,7 @@ const FN = {
   log: Math.log10, log10: Math.log10, log2: Math.log2,
 };
 const CONST = { pi: Math.PI, e: Math.E };
-const NAMES = [...Object.keys(FN), ...Object.keys(CONST), 'x', 'y'].sort((a, b) => b.length - a.length);
+const NAMES = [...Object.keys(FN), ...Object.keys(CONST), 'x', 'y', 't'].sort((a, b) => b.length - a.length);
 
 function normalizeExpr(s) {
   return String(s).toLowerCase().replace(/\s+/g, '')
@@ -205,7 +205,7 @@ function compileSide(s) {
       return (x, y) => Math.abs(a(x, y));
     }
     if (tk.k === 'id') {
-      if (tk.v === 'x') return x => x;
+      if (tk.v === 'x' || tk.v === 't') return x => x; // 媒介変数 t は x と同じ位置で受け取る
       if (tk.v === 'y') return (x, y) => y;
       if (tk.v in CONST) { const v = CONST[tk.v]; return () => v; }
       if (tk.v === 'log' && is('_')) { // log_2(x)
@@ -224,10 +224,13 @@ function compileSide(s) {
   return f;
 }
 
+const usesVar = (s, v) => tokenize(s).some(t => t.k === 'id' && t.v === v);
+
 // 定規の式を読む → { kind: 'fn', f(x) } または { kind: 'implicit', F(x, y) }（F = 0 が曲線）
 function parseRulerExpr(src) {
   const s = normalizeExpr(src);
   if (!s) throw new Error('式を入れてください');
+  if (usesVar(s.replace(/=/g, '+'), 't')) throw new Error('t は「媒介変数」で使えます');
   const parts = s.split('=');
   if (parts.length > 2) throw new Error('「=」は1つだけにしてください');
   if (parts.length === 1) {
@@ -262,14 +265,46 @@ function prettyExpr(src) {
   return hasY ? prettySide(s) + ' = 0' : 'y = ' + prettySide(s);
 }
 
+// 媒介変数表示 x = fx(t), y = fy(t), t0 ≦ t ≦ t1 を読む
+function parseParam(px, py, t0, t1) {
+  const one = (src, name) => {
+    const s = normalizeExpr(src);
+    if (!s) throw new Error(`${name} を入れてください`);
+    if (s.includes('=')) throw new Error(`${name} に「=」は要りません`);
+    if (usesVar(s, 'x') || usesVar(s, 'y')) throw new Error(`${name} は t の式で書いてください`);
+    const f = compileSide(s);
+    return t => f(t, 0); // t は x と同じ位置で受け取る（compileSide 参照）
+  };
+  const num = (src, name) => {
+    const s = normalizeExpr(src);
+    if (!s) throw new Error(`t の${name}を入れてください`);
+    if (['x', 'y', 't'].some(v => usesVar(s, v))) throw new Error(`t の${name}は数で書いてください（pi も可）`);
+    const v = compileSide(s)(0, 0);
+    if (!Number.isFinite(v)) throw new Error(`t の${name}が数になりません`);
+    return v;
+  };
+  const fx = one(px, 'x(t)'), fy = one(py, 'y(t)'), a = num(t0, '始め'), b = num(t1, '終わり');
+  if (!(b > a)) throw new Error('t の終わりは始めより大きくしてください');
+  return { kind: 'param', fx, fy, t0: a, t1: b };
+}
+const paramSrc = R => [R.px, R.py, R.t0, R.t1].join('\u0001');
+const rulerSrc = R => (R.type === 'param' ? 'p:' + paramSrc(R) : 'f:' + R.expr);
+
 let compiled = { src: null, c: null, err: '' };
 function rulerParsed() {
-  const src = S.ruler.expr;
+  const R = S.ruler, src = rulerSrc(R);
   if (compiled.src !== src) {
-    try { compiled = { src, c: parseRulerExpr(src), err: '' }; }
+    try { compiled = { src, c: R.type === 'param' ? parseParam(R.px, R.py, R.t0, R.t1) : parseRulerExpr(R.expr), err: '' }; }
     catch (e) { compiled = { src, c: null, err: e.message }; }
   }
   return compiled.c;
+}
+// 定規に表示する式
+function rulerLabel() {
+  const R = S.ruler;
+  if (R.type !== 'param') return prettyExpr(R.expr);
+  const p = s => prettySide(normalizeExpr(s));
+  return `x = ${p(R.px)},  y = ${p(R.py)}   (${p(R.t0)} ≦ t ≦ ${p(R.t1)})`;
 }
 
 /* =========================================================
@@ -284,15 +319,50 @@ function rulerCurve() {
   const R = S.ruler, c = rulerParsed();
   if (!c) return [];
   // ピンチ中は作り直さない（単位系で持っているので形はそのまま正しい）
-  if (act && act.type === 'pinch' && curveCache.expr === R.expr) return curveCache.segs;
+  const src = rulerSrc(R);
+  if (act && act.type === 'pinch' && curveCache.expr === src) return curveCache.segs;
   const su = R.unit * S.view.s, o = rulerOrigin();
   const far = Math.max(Math.hypot(o.x, o.y), Math.hypot(W - o.x, o.y), Math.hypot(o.x, H - o.y), Math.hypot(W - o.x, H - o.y));
   const zb = Math.round(Math.log2(su) * 4), ub = Math.ceil(Math.log2(far / su + 2) * 2);
-  const key = [R.expr, zb, ub].join('|');
+  const key = [src, zb, ub].join('|');
   if (curveCache.key === key) return curveCache.segs;
   const U = Math.pow(2, ub / 2), suB = Math.pow(2, zb / 4);
-  const segs = c.kind === 'fn' ? sampleFn(c.f, U, 1.5 / suB) : traceImplicit(c.F, U, 5 / suB);
-  curveCache = { key, expr: R.expr, segs };
+  const segs = c.kind === 'fn' ? sampleFn(c.f, U, 1.5 / suB)
+    : c.kind === 'param' ? sampleParam(c, U, 1.5 / suB)
+    : traceImplicit(c.F, U, 5 / suB);
+  curveCache = { key, expr: src, segs };
+  return segs;
+}
+
+// 媒介変数表示：t を少しずつ進め、画面上で約1.5pxおきに点を打つ
+function sampleParam({ fx, fy, t0, t1 }, U, px) {
+  const span = t1 - t0, minDt = span * 1e-7, maxDt = span / 400;
+  const at = t => { const x = fx(t), y = fy(t); return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= U * 4 && Math.abs(y) <= U * 4 ? [x, y] : null; };
+  const segs = [];
+  let cur = [], prev = null, t = t0;
+  const brk = () => { if (cur.length >= 4) segs.push(cur); cur = []; };
+  for (let count = 0; count < 300000; count++) {
+    const q = at(t);
+    if (q) {
+      if (prev && Math.hypot(q[0] - prev[0], q[1] - prev[1]) > px * 20) brk(); // 値が飛んだ（tan など）
+      cur.push(q[0], q[1]);
+    } else brk();
+    prev = q;
+    if (t >= t1) break;
+    // 次の t：速さ |(x', y')| から、画面上で約 px 進むように
+    let dt = maxDt;
+    if (q) {
+      const h = Math.max(1e-7, span * 1e-7), r = at(t + h);
+      if (r) { const sp = Math.hypot(r[0] - q[0], r[1] - q[1]) / h; if (sp > 0) dt = px / sp; }
+    }
+    t = Math.min(t1, t + clamp(dt, minDt, maxDt));
+  }
+  brk();
+  // 始点と終点が重なれば一周する形（円など）
+  if (segs.length === 1) {
+    const P = segs[0], n = P.length;
+    if (Math.hypot(P[0] - P[n - 2], P[1] - P[n - 1]) < px * 2) P.closed = true;
+  }
   return segs;
 }
 
@@ -442,7 +512,7 @@ function nearestOnCurve(lx, ly, hint) {
   return best;
 }
 function curveSnapStart(x, y) {
-  if (!S.ruler.on || S.ruler.type !== 'fn') return null;
+  if (!S.ruler.on || S.ruler.type === 'line') return null;
   const { lx, ly } = rulerLocal(x, y), r = nearestOnCurve(lx, ly);
   return r.d <= CURVE_SNAP ? r : null;
 }
@@ -534,11 +604,11 @@ function drawFnRuler(c) {
   c.restore();
   const deg = rulerDeg();
   if (compiled.err) drawPill(c, '式エラー：' + compiled.err, o.x + 18, o.y - 28, 'left', 'rgba(220,38,38,.92)', '#ffffff');
-  else drawPill(c, prettyExpr(R.expr) + (deg ? `   ${deg}°` : ''), o.x + 18, o.y - 28, 'left');
+  else drawPill(c, rulerLabel() + (deg ? `   ${deg}°` : ''), o.x + 18, o.y - 28, 'left');
 }
 
 function drawRuler(c) {
-  if (S.ruler.type === 'fn') { drawFnRuler(c); return; }
+  if (S.ruler.type !== 'line') { drawFnRuler(c); return; }
   const r = S.ruler, o = rulerOrigin(), L = Math.hypot(W, H) * 1.5, hw = RULER_W / 2;
   c.save();
   c.translate(o.x, o.y);
@@ -581,13 +651,24 @@ function placeRulerAtCenter() {
   setRulerCenter(W / 2, H / 2);
   if (g) {
     R.wy = Math.round(R.wy / g) * g;
-    if (R.type === 'fn') R.wx = Math.round(R.wx / g) * g;
+    if (R.type !== 'line') R.wx = Math.round(R.wx / g) * g;
   }
 }
 function saveRulerCfg() {
-  const { type, expr, unit } = S.ruler;
-  LS.set('ruler2', { type, expr, unit });
+  const { type, expr, unit, px, py, t0, t1 } = S.ruler;
+  LS.set('ruler2', { type, expr, unit, px, py, t0, t1 });
 }
+const PARAM_DEFAULT = { px: '3cos(t)', py: '2sin(t)', t0: '0', t1: '2pi' };
+const PARAM_EXAMPLES = [
+  ['円', '3cos(t)', '3sin(t)', '0', '2pi'],
+  ['楕円', '3cos(t)', '2sin(t)', '0', '2pi'],
+  ['サイクロイド', 't-sin(t)', '1-cos(t)', '0', '4pi'],
+  ['アステロイド', '3cos(t)^3', '3sin(t)^3', '0', '2pi'],
+  ['カージオイド', '2cos(t)-cos(2t)', '2sin(t)-sin(2t)', '0', '2pi'],
+  ['リサージュ', '3sin(3t)', '3sin(2t)', '0', '2pi'],
+  ['らせん', '0.3t cos(t)', '0.3t sin(t)', '0', '6pi'],
+  ['放物線', 't', 't^2', '-3', '3'],
+];
 function unitLabel() {
   const g = gridStep(), u = S.ruler.unit;
   if (!g) return Math.round(u) + 'px';
@@ -599,12 +680,23 @@ function renderRulerOpts() {
   const box = $('#ruler-opts'), R = S.ruler;
   if (!box) return;
   if (!R.on) { box.innerHTML = ''; return; }
-  let h = `<div class="seg" id="ru-type"><button data-v="line" class="${R.type === 'line' ? 'active' : ''}">直線</button><button data-v="fn" class="${R.type === 'fn' ? 'active' : ''}">関数</button></div>`;
+  for (const k in PARAM_DEFAULT) if (R[k] == null) R[k] = PARAM_DEFAULT[k];
+  const types = [['line', '直線'], ['fn', '関数'], ['param', '媒介変数']];
+  const inp = (id, ph, cls = '') => `<input id="${id}" class="${cls}" placeholder="${ph}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done">`;
+  let h = `<div class="seg" id="ru-type">${types.map(([v, l]) => `<button data-v="${v}" class="${R.type === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   if (R.type === 'fn') {
     h += `<span class="sep"></span>
-      <label class="fld">式<input id="ru-expr" placeholder="x^2 や x^2+y^2=9" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done"></label>
-      <select id="ru-ex" title="例から選ぶ"><option value="">例</option>${FN_EXAMPLES.map(([g, list]) => `<optgroup label="${g}">${list.map(e => `<option value="${e}">${prettyExpr(e)}</option>`).join('')}</optgroup>`).join('')}</select>
-      <span class="sep"></span>
+      <label class="fld">式${inp('ru-expr', 'x^2 や x^2+y^2=9')}</label>
+      <select id="ru-ex" title="例から選ぶ"><option value="">例</option>${FN_EXAMPLES.map(([g, list]) => `<optgroup label="${g}">${list.map(e => `<option value="${e}">${prettyExpr(e)}</option>`).join('')}</optgroup>`).join('')}</select>`;
+  } else if (R.type === 'param') {
+    h += `<span class="sep"></span>
+      <label class="fld">x =${inp('ru-px', '3cos(t)', 'pexpr')}</label>
+      <label class="fld">y =${inp('ru-py', '2sin(t)', 'pexpr')}</label>
+      <label class="fld">t${inp('ru-t0', '0', 'prange')}〜${inp('ru-t1', '2pi', 'prange')}</label>
+      <select id="ru-ex" title="例から選ぶ"><option value="">例</option>${PARAM_EXAMPLES.map(([name], i) => `<option value="${i}">${name}</option>`).join('')}</select>`;
+  }
+  if (R.type !== 'line') {
+    h += `<span class="sep"></span>
       <span class="fld">1目盛<button class="step" data-d="0.5" title="小さく">−</button><b id="ru-unit">${unitLabel()}</b><button class="step" data-d="2" title="大きく">+</button></span>`;
   }
   box.innerHTML = h;
@@ -616,7 +708,13 @@ function renderRulerOpts() {
     placeRulerAtCenter();
     saveRulerCfg(); renderRulerOpts(); renderOverSoon();
   });
-  if (R.type !== 'fn') return;
+  if (R.type === 'line') return;
+  box.querySelectorAll('.step').forEach(b => b.onclick = () => {
+    R.unit = clamp(R.unit * +b.dataset.d, 2, 2048);
+    box.querySelector('#ru-unit').textContent = unitLabel();
+    saveRulerCfg(); renderOverSoon();
+  });
+  if (R.type === 'param') { bindParamInputs(box); return; }
 
   const input = box.querySelector('#ru-expr');
   input.value = R.expr;
@@ -637,10 +735,42 @@ function renderRulerOpts() {
 
   const ex = box.querySelector('#ru-ex');
   ex.onchange = () => { if (!ex.value) return; input.value = ex.value; ex.value = ''; apply(true); };
+}
 
-  box.querySelectorAll('.step').forEach(b => b.onclick = () => {
-    R.unit = clamp(R.unit * +b.dataset.d, 2, 2048);
-    box.querySelector('#ru-unit').textContent = unitLabel();
-    saveRulerCfg(); renderOverSoon();
-  });
+// 媒介変数の4つの入力欄。どれかが正しくなければ、その欄を赤くして前の形のまま
+function bindParamInputs(box) {
+  const R = S.ruler;
+  const els = { px: box.querySelector('#ru-px'), py: box.querySelector('#ru-py'), t0: box.querySelector('#ru-t0'), t1: box.querySelector('#ru-t1') };
+  for (const k in els) els[k].value = R[k];
+  let timer = 0;
+  const apply = showError => {
+    const v = {};
+    for (const k in els) v[k] = els[k].value.trim();
+    try {
+      parseParam(v.px, v.py, v.t0, v.t1);
+      for (const k in els) els[k].classList.remove('bad');
+      Object.assign(R, v); saveRulerCfg(); renderOverSoon();
+    } catch (e) {
+      // どの欄が悪いか：1つずつ差し替えて確かめる
+      for (const k in els) {
+        let bad = false;
+        try { parseParam(...['px', 'py', 't0', 't1'].map(q => (q === k ? v[q] : R[q]))); } catch { bad = true; }
+        els[k].classList.toggle('bad', bad);
+      }
+      if (showError) toast(e.message);
+    }
+  };
+  for (const k in els) {
+    els[k].oninput = () => { clearTimeout(timer); timer = setTimeout(() => apply(false), 250); };
+    els[k].onchange = () => { clearTimeout(timer); apply(true); };
+    els[k].onkeydown = e => { if (e.key === 'Enter') els[k].blur(); };
+  }
+  const ex = box.querySelector('#ru-ex');
+  ex.onchange = () => {
+    const e = PARAM_EXAMPLES[+ex.value];
+    ex.value = '';
+    if (!e) return;
+    [els.px.value, els.py.value, els.t0.value, els.t1.value] = e.slice(1);
+    apply(true);
+  };
 }

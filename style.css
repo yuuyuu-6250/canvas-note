@@ -156,8 +156,17 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 }
 #ru-unit { min-width: 44px; font-weight: 600; }
 .step { width: 26px; height: 26px; border-radius: 7px; background: var(--hover); color: var(--text); }
+.fld input.pexpr { width: 120px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
+.fld input.prange { width: 52px; font-family: ui-monospace, "SF Mono", Consolas, monospace; }
 @media (max-width: 760px) {
-  #ru-expr { width: 130px; font-size: 16px; } /* iOS で入力時に拡大されないよう 16px */
+  /* iOS で入力時に拡大されないよう 16px */
+  #ru-expr { width: 130px; font-size: 16px; }
+  .fld input.pexpr, .fld input.prange { font-size: 16px; }
+  /* 定規のバーは項目が多いので折り返す */
+  #ruler-opts { flex-wrap: wrap; justify-content: center; row-gap: 4px; }
+  #ruler-opts .sep { display: none; }
+  /* ツールバーが下にあるので、お知らせは上に出す */
+  #toast { bottom: auto; top: calc(64px + var(--safe-t)); }
 }
 
 .swatches { display: flex; gap: 4px; align-items: center; }
