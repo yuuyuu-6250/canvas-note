@@ -164,6 +164,7 @@ function resize() {
     c.width = Math.round(W * DPR); c.height = Math.round(H * DPR);
     c.style.width = W + 'px'; c.style.height = H + 'px';
   }
+  clearTiles(); // 画面の細かさ（DPR）が変わることがある
   render();
 }
 
@@ -325,8 +326,93 @@ function render() { renderMainSoon(); renderOverSoon(); }
 function renderMainSoon() { if (!rafMain) rafMain = requestAnimationFrame(() => { rafMain = 0; renderMain(); }); }
 function renderOverSoon() { if (!rafOver) rafOver = requestAnimationFrame(() => { rafOver = 0; renderOver(); }); }
 
+/* ---------- タイル（描いた内容を小さな画像に分けて覚えておく） ----------
+   スクロール中は覚えた画像を並べ直すだけなので、線を描き直さない。
+   ズーム中は前の倍率の画像を伸び縮みさせて見せ、止まったらその倍率で描き直す。
+   線が変わったら、その範囲のタイルだけ捨てる。 */
+const TILE = 256;            // タイルの大きさ（画面px）
+const TILE_MAX = 160;        // 覚えておく枚数の上限（古いものから捨てる）
+const tiles = new Map();     // key -> { cv, x0, y0, x1, y1 }（x0.. はワールド座標の範囲）
+let tileLevel = 0;           // 今使っているタイルの倍率
+let lastZoomAt = 0, idleTimer = 0;
+function clearTiles() {
+  for (const t of tiles.values()) t.cv.width = 0;
+  tiles.clear();
+}
+function invalidateTiles(bb) {
+  for (const [k, t] of tiles) {
+    if (t.x1 < bb.x0 || t.x0 > bb.x1 || t.y1 < bb.y0 || t.y0 > bb.y1) continue;
+    t.cv.width = 0;
+    tiles.delete(k);
+  }
+}
+function renderTile(L, tx, ty) {
+  const ts = TILE / L, x0 = tx * ts, y0 = ty * ts, x1 = x0 + ts, y1 = y0 + ts;
+  const px = Math.ceil(TILE * DPR), cv = document.createElement('canvas');
+  cv.width = cv.height = px;
+  const c = cv.getContext('2d');
+  c.setTransform(L * DPR, 0, 0, L * DPR, -x0 * L * DPR, -y0 * L * DPR);
+  c.fillStyle = T.paper;
+  c.fillRect(x0, y0, ts, ts);
+  drawBg(c, { x0, y0, x1, y1 }, L, S.board.bg);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const st of S.strokes) {
+    const b = bbox(st);
+    if (b.x1 < x0 || b.x0 > x1 || b.y1 < y0 || b.y0 > y1) continue;
+    drawStroke(c, st);
+  }
+  return { cv, x0, y0, x1, y1 };
+}
+// ズームが止まったら、その倍率で描き直す
+function noteZoom() {
+  lastZoomAt = performance.now();
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(renderMainSoon, 180);
+}
+
 function renderMain() {
   if (!S.board) return;
+  const v = S.view, sel = S.sel;
+  $('#zoom').textContent = Math.round(v.s * 100) + '%';
+  // 選択した線を動かしている間は、その線を除いて直接描く
+  if (sel && (sel.dx || sel.dy || sel.preview)) { renderDirect(); return; }
+
+  const zooming = performance.now() - lastZoomAt < 170;
+  const k0 = v.s / (tileLevel || v.s);
+  if (!tileLevel || (!zooming && tileLevel !== v.s) || k0 > 2 || k0 < 0.5) tileLevel = v.s;
+  const L = tileLevel, k = v.s / L, ts = TILE / L, r = viewRect();
+  const c = mc;
+  // タイルがまだ無い所のための下地
+  c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.fillStyle = T.paper;
+  c.fillRect(0, 0, W, H);
+  c.setTransform(DPR * v.s, 0, 0, DPR * v.s, DPR * v.x, DPR * v.y);
+  drawBg(c, r, v.s, S.board.bg);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.imageSmoothingEnabled = true;
+  // 動いている間は1コマに作る枚数を絞る（残りは次のコマで）
+  let budget = zooming || performance.now() - lastPanAt < 120 ? 6 : Infinity, missing = false;
+  const tx0 = Math.floor(r.x0 / ts), tx1 = Math.floor(r.x1 / ts), ty0 = Math.floor(r.y0 / ts), ty1 = Math.floor(r.y1 / ts);
+  const size = TILE * k * DPR;
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+    const key = L + '|' + tx + '|' + ty;
+    let t = tiles.get(key);
+    if (t) { tiles.delete(key); tiles.set(key, t); } // 最近使ったものを後ろへ
+    else if (budget > 0) {
+      budget--;
+      t = renderTile(L, tx, ty);
+      tiles.set(key, t);
+      if (tiles.size > TILE_MAX) { const [ok, ot] = tiles.entries().next().value; ot.cv.width = 0; tiles.delete(ok); }
+    } else { missing = true; continue; }
+    const sx = (tx * ts * v.s + v.x) * DPR, sy = (ty * ts * v.s + v.y) * DPR;
+    if (k === 1) c.drawImage(t.cv, Math.round(sx), Math.round(sy));
+    else c.drawImage(t.cv, sx, sy, size, size);
+  }
+  if (missing) renderMainSoon();
+}
+
+// タイルを使わずに全部描く（選択した線を動かしている間）
+function renderDirect() {
   const c = mc, v = S.view;
   c.setTransform(DPR, 0, 0, DPR, 0, 0);
   c.fillStyle = T.paper;
@@ -347,11 +433,11 @@ function renderMain() {
     c.translate(sel.dx, sel.dy);
     for (const st of sel.set) drawStroke(c, st);
   }
-  $('#zoom').textContent = Math.round(v.s * 100) + '%';
 }
 
 // 書き足した線を、今の画面にそのまま描き足す（全体の描き直しが予定されていればそちらに任せる）
 function appendToMain(st) {
+  invalidateTiles(bbox(st)); // その範囲のタイルは次に描くときに作り直す
   if (rafMain || !S.board) { renderMainSoon(); return; }
   const v = S.view;
   mc.setTransform(DPR * v.s, 0, 0, DPR * v.s, DPR * v.x, DPR * v.y);
@@ -470,6 +556,7 @@ function changed(added) {
     renderOverSoon();
   } else {
     saveNow();
+    clearTiles();
     render();
   }
   window.Sync?.changed();
@@ -571,17 +658,18 @@ function eraseTo(x, y) {
   const ey0 = Math.min(a.y, w.y) - r, ey1 = Math.max(a.y, w.y) + r;
   const partial = S.eraser.mode === 'partial';
   let didChange = false;
-  const res = [];
+  const res = [], hit = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }; // 変わった線の範囲
+  const grow = b => { hit.x0 = Math.min(hit.x0, b.x0); hit.y0 = Math.min(hit.y0, b.y0); hit.x1 = Math.max(hit.x1, b.x1); hit.y1 = Math.max(hit.y1, b.y1); };
   for (const st of S.strokes) {
     const bb = bbox(st);
     if (bb.x1 < ex0 || bb.x0 > ex1 || bb.y1 < ey0 || bb.y0 > ey1) { res.push(st); continue; }
     if (partial) {
       const parts = splitStroke(st, a, w, r);
-      if (parts) { didChange = true; res.push(...parts); } else res.push(st);
-    } else if (strokeHits(st, a, w, r + st.w / 2)) didChange = true;
+      if (parts) { didChange = true; grow(bb); res.push(...parts); } else res.push(st);
+    } else if (strokeHits(st, a, w, r + st.w / 2)) { didChange = true; grow(bb); }
     else res.push(st);
   }
-  if (didChange) { S.strokes = res; act.changed = true; renderMainSoon(); }
+  if (didChange) { S.strokes = res; act.changed = true; invalidateTiles(hit); renderMainSoon(); }
 }
 
 /* =========================================================
@@ -793,7 +881,18 @@ function updatePinch() {
   S.view = { x: m.x - wx * s, y: m.y - wy * s, s };
   viewChanged();
 }
-function viewChanged() { saveView(); render(); }
+let lastPanAt = 0, prevScale = 0;
+// 表示位置を画面のピクセルの区切りにそろえる（タイルの画像がずれずにぴったり並ぶ）
+function snapView() {
+  S.view.x = Math.round(S.view.x * DPR) / DPR;
+  S.view.y = Math.round(S.view.y * DPR) / DPR;
+}
+function viewChanged() {
+  snapView();
+  lastPanAt = performance.now();
+  if (S.view.s !== prevScale) { prevScale = S.view.s; noteZoom(); }
+  saveView(); render();
+}
 
 function zoomAt(x, y, f) {
   const v = S.view, s = clamp(v.s * f, 0.05, 16);
@@ -805,7 +904,7 @@ function zoomAt(x, y, f) {
 function cancelAction() {
   if (!act) return;
   if (act.type === 'draw') S.cur = null;
-  if (act.type === 'erase' && act.changed) S.strokes = act.before;
+  if (act.type === 'erase' && act.changed) { S.strokes = act.before; clearTiles(); }
   if (act.type === 'lasso') S.lasso = null;
   if (act.type === 'move') { S.sel.dx = S.sel.dy = 0; }
   if (act.type === 'scale' && S.sel) { S.sel.tf = null; S.sel.preview = null; }
@@ -1189,7 +1288,7 @@ function syncBgUI() {
 }
 // 濃さ：動かしている間は表示だけ、離したら保存
 $('#bg-strength').addEventListener('input', e => {
-  S.board.bg = { ...S.board.bg, strength: +e.target.value / 100 }; renderMainSoon();
+  S.board.bg = { ...S.board.bg, strength: +e.target.value / 100 }; clearTiles(); renderMainSoon();
 });
 $('#bg-strength').addEventListener('change', () => { LS.set('lastBg', S.board.bg); changed(); });
 
@@ -1214,6 +1313,7 @@ $('#theme').addEventListener('click', e => {
 const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 function applyTheme() {
   const dark = S.theme === 'dark' || (S.theme === 'auto' && !!mqDark && mqDark.matches);
+  clearTiles();
   T = dark ? THEMES.dark : THEMES.light;
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   $('meta[name="theme-color"]').content = dark ? '#1b1c20' : '#f6f7f9';
@@ -1359,8 +1459,10 @@ function openBoard(b) {
   if (act) cancelAction();
   S.board = b;
   S.strokes = b.strokes || [];
+  clearTiles();
   const v = LS.get('view:' + b.id, null) || b.view;
   S.view = v && Number.isFinite(v.s) ? { x: v.x, y: v.y, s: v.s } : { x: 0, y: 0, s: 1 };
+  snapView();
   if (!b.bg) b.bg = { type: 'grid', size: 32 };
   S.undo = []; S.redo = []; S.sel = null;
   $('#title').value = b.name;
@@ -1481,7 +1583,7 @@ window.App = {
     await Store.put(b);
     if (b === S.board) {
       if (act) cancelAction();
-      S.strokes = b.strokes; S.undo = []; S.redo = []; S.sel = null;
+      S.strokes = b.strokes; S.undo = []; S.redo = []; S.sel = null; clearTiles();
       $('#title').value = b.name;
       syncBgUI(); updateHistoryButtons(); render();
     }
@@ -1541,7 +1643,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=14').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=15').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
