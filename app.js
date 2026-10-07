@@ -4,26 +4,43 @@
    保存（IndexedDB）
    クラウド同期を入れるときは、この Store を差し替える。
    ========================================================= */
+// boards  ：ボード全体（線をすべて含む）
+// pending ：まだボード全体に書き込んでいない「書き足した線」。1本ずつ小さく追記するので速い。
+//           手を止めたときにボード全体を書き直し、ここは空にする（compact）
 const Store = (() => {
   let dbp = null, db = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('canvas-note', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('boards', { keyPath: 'id' });
+    const r = indexedDB.open('canvas-note', 2);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      if (!d.objectStoreNames.contains('boards')) d.createObjectStore('boards', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('pending')) d.createObjectStore('pending', { keyPath: ['b', 'id'] });
+    };
     r.onsuccess = () => res(db = r.result);
     r.onerror = () => rej(r.error);
   }));
-  const tx = (d, mode, fn) => new Promise((res, rej) => {
-    const t = d.transaction('boards', mode);
-    const req = fn(t.objectStore('boards'));
+  const tx = (d, stores, mode, fn) => new Promise((res, rej) => {
+    const t = d.transaction(stores, mode);
+    const req = fn(t);
     t.oncomplete = () => res(req && req.result);
     t.onerror = () => rej(t.error);
   });
   // 開いていればその場で書き込みを始める（ページを閉じる直前でも間に合うように、await を挟まない）
-  const run = (mode, fn) => (db ? tx(db, mode, fn) : open().then(d => tx(d, mode, fn)));
+  const run = (stores, mode, fn) => (db ? tx(db, stores, mode, fn) : open().then(d => tx(d, stores, mode, fn)));
+  const boardRange = id => IDBKeyRange.bound([id], [id, []]);
   return {
-    all: () => run('readonly', s => s.getAll()),
-    put: b => run('readwrite', s => s.put(b)),
-    del: id => run('readwrite', s => s.delete(id)),
+    all: () => run('boards', 'readonly', t => t.objectStore('boards').getAll()),
+    // ボード全体を書き、そのボードの pending を消す（同じトランザクションなので途中で止まっても失われない）
+    put: b => run(['boards', 'pending'], 'readwrite', t => {
+      t.objectStore('pending').delete(boardRange(b.id));
+      return t.objectStore('boards').put(b);
+    }),
+    del: id => run(['boards', 'pending'], 'readwrite', t => {
+      t.objectStore('pending').delete(boardRange(id));
+      return t.objectStore('boards').delete(id);
+    }),
+    addPending: (boardId, st) => run('pending', 'readwrite', t => t.objectStore('pending').put({ b: boardId, id: st.id, st })),
+    allPending: () => run('pending', 'readonly', t => t.objectStore('pending').getAll()),
   };
 })();
 
@@ -333,6 +350,15 @@ function renderMain() {
   $('#zoom').textContent = Math.round(v.s * 100) + '%';
 }
 
+// 書き足した線を、今の画面にそのまま描き足す（全体の描き直しが予定されていればそちらに任せる）
+function appendToMain(st) {
+  if (rafMain || !S.board) { renderMainSoon(); return; }
+  const v = S.view;
+  mc.setTransform(DPR * v.s, 0, 0, DPR * v.s, DPR * v.x, DPR * v.y);
+  mc.lineCap = 'round'; mc.lineJoin = 'round';
+  drawStroke(mc, st);
+}
+
 let hover = null; // マウス／ペンのホバー位置（消しゴムのカーソル用）
 
 function renderOver() {
@@ -404,11 +430,12 @@ function renderOver() {
 /* =========================================================
    履歴
    ========================================================= */
-function pushUndo(before) {
+// added：線を1本書き足しただけのとき、その線（保存と描画を軽くする）
+function pushUndo(before, added) {
   S.undo.push(before);
   if (S.undo.length > 200) S.undo.shift();
   S.redo.length = 0;
-  changed();
+  changed(added);
 }
 function undo() {
   if (!S.undo.length) return;
@@ -426,17 +453,30 @@ function updateHistoryButtons() {
 /* =========================================================
    保存
    ========================================================= */
-let saveTimer = 0;
-function changed() {
+/* 保存のしかた
+   ・線を1本書き足した → その線だけを pending にすぐ追記（軽い）。ボード全体は手を止めて
+     COMPACT_MS 後にまとめて書く
+   ・消す・動かす・元に戻すなど → ボード全体をすぐ書く
+   ・表示位置（スクロール・ズーム）→ localStorage に少し待ってから（ボード全体は書かない） */
+const COMPACT_MS = 3000;
+let saveTimer = 0, viewTimer = 0;
+function changed(added) {
   if (S.board) S.board.updatedAt = Date.now();
   updateHistoryButtons();
-  saveNow(); // 描いた・消したなどはすぐ保存（表示位置の変更だけは scheduleSave で少し待つ）
+  if (added && S.board) {
+    Store.addPending(S.board.id, added).catch(err => toast('保存に失敗しました: ' + err.message));
+    scheduleSave(COMPACT_MS);
+    appendToMain(added); // 画面全体は描き直さず、その線だけ描き足す
+    renderOverSoon();
+  } else {
+    saveNow();
+    render();
+  }
   window.Sync?.changed();
-  render();
 }
-function scheduleSave() {
+function scheduleSave(ms = 500) {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 500);
+  saveTimer = setTimeout(saveNow, ms);
 }
 function saveNow() {
   clearTimeout(saveTimer);
@@ -444,6 +484,11 @@ function saveNow() {
   S.board.strokes = S.strokes;
   S.board.view = { ...S.view };
   persistBoard(S.board);
+}
+// 表示位置はボードごとに localStorage へ（ボード全体を書き直さない）
+function saveView() {
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(() => { if (S.board) LS.set('view:' + S.board.id, S.view); }, 400);
 }
 // 書き込みは1つずつ。書き込み中に来たものは、終わってからまとめて書く
 let saving = null;
@@ -748,7 +793,7 @@ function updatePinch() {
   S.view = { x: m.x - wx * s, y: m.y - wy * s, s };
   viewChanged();
 }
-function viewChanged() { scheduleSave(); render(); }
+function viewChanged() { saveView(); render(); }
 
 function zoomAt(x, y, f) {
   const v = S.view, s = clamp(v.s * f, 0.05, 16);
@@ -939,7 +984,7 @@ function onUp(e) {
       if (a.st.p.length) {
         const before = S.strokes.slice();
         S.strokes.push(a.st);
-        pushUndo(before);
+        pushUndo(before, a.st);
       }
       break;
     case 'erase':
@@ -1245,7 +1290,8 @@ function exportPNG() {
 
 async function exportJSON() {
   saveNow();
-  const boards = (await Store.all()).filter(b => !b.deleted);
+  // メモリ上の最新の内容を書き出す（保存の書き込み待ちがあっても漏れないように）
+  const boards = visibleBoards().map(b => (b === S.board ? { ...b, strokes: S.strokes, view: { ...S.view } } : b));
   const data = { app: 'canvas-note', version: 1, exportedAt: new Date().toISOString(), boards };
   const d = new Date();
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
@@ -1291,7 +1337,17 @@ async function ensureBoard() {
   S.boards.push(b);
 }
 async function loadBoards() {
-  S.boards = await Store.all();
+  const [boards, pending] = await Promise.all([Store.all(), Store.allPending()]);
+  S.boards = boards;
+  // 前回、ボード全体に書き込む前に閉じた線を戻す
+  const touched = new Set();
+  for (const { b: id, st } of pending) {
+    const b = S.boards.find(x => x.id === id);
+    if (!b || b.deleted) continue;
+    b.strokes = b.strokes || [];
+    if (!b.strokes.some(s => s.id === st.id)) { b.strokes.push(st); b.updatedAt = Math.max(b.updatedAt || 0, Date.now()); touched.add(b); }
+  }
+  for (const b of touched) await Store.put(b);
   await ensureBoard();
   const last = LS.get('lastBoard', null);
   S.board = null; // 読み込み直後なので、古いメモリ内容で上書き保存しない
@@ -1303,7 +1359,8 @@ function openBoard(b) {
   if (act) cancelAction();
   S.board = b;
   S.strokes = b.strokes || [];
-  S.view = b.view ? { ...b.view } : { x: 0, y: 0, s: 1 };
+  const v = LS.get('view:' + b.id, null) || b.view;
+  S.view = v && Number.isFinite(v.s) ? { x: v.x, y: v.y, s: v.s } : { x: 0, y: 0, s: 1 };
   if (!b.bg) b.bg = { type: 'grid', size: 32 };
   S.undo = []; S.redo = []; S.sel = null;
   $('#title').value = b.name;
@@ -1411,7 +1468,8 @@ window.App = {
   strokesOf: b => (b === S.board ? S.strokes : b.strokes || []),
   saveNow,
   persist(b) {
-    if (b === S.board) { saveNow(); return Promise.resolve(); }
+    // 今のボードは、手を止めたときのまとめ書きに任せる（書いている最中に全体を書き直さない）
+    if (b === S.board) { scheduleSave(COMPACT_MS); return Promise.resolve(); }
     return Store.put(b);
   },
   // クラウドの内容でボードを置き換える。その間に編集が入っていたら見送る（次の同期で処理）
@@ -1483,7 +1541,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=13').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=14').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
