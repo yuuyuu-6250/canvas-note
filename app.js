@@ -1439,6 +1439,8 @@ async function ensureBoard() {
 async function loadBoards() {
   const [boards, pending] = await Promise.all([Store.all(), Store.allPending()]);
   S.boards = boards;
+  // 「ここまで同期した」は localStorage の方が新しい（ボード全体の保存より先に書くため）
+  for (const b of S.boards) { const s = LS.get('synced:' + b.id, null); if (s != null) b.syncedAt = s; }
   // 前回、ボード全体に書き込む前に閉じた線を戻す
   const touched = new Set();
   for (const { b: id, st } of pending) {
@@ -1553,7 +1555,7 @@ function toast(msg) {
 /* =========================================================
    クラウド同期との接続（sync.js から使う）
    ========================================================= */
-const SYNC_LABEL = { off: '同期オフ', signedout: 'ログイン', syncing: '同期中…', ok: '同期済み', offline: 'オフライン', error: '同期エラー' };
+const SYNC_LABEL = { off: '同期オフ', signedout: 'ログイン', pending: '未送信', syncing: '同期中…', ok: '同期済み', offline: 'オフライン', error: '同期エラー' };
 const syncState = { status: 'off', user: null, msg: '' };
 
 function renderSync() {
@@ -1570,7 +1572,9 @@ window.App = {
   strokesOf: b => (b === S.board ? S.strokes : b.strokes || []),
   saveNow,
   persist(b) {
-    // 今のボードは、手を止めたときのまとめ書きに任せる（書いている最中に全体を書き直さない）
+    // 「ここまで同期した」はすぐ覚える（ボード全体の保存を待つ間に閉じても、競合と間違えないように）
+    LS.set('synced:' + b.id, b.syncedAt);
+    // 今のボードの全体は、手を止めたときのまとめ書きに任せる（書いている最中に全体を書き直さない）
     if (b === S.board) { scheduleSave(COMPACT_MS); return Promise.resolve(); }
     return Store.put(b);
   },
@@ -1580,6 +1584,7 @@ window.App = {
     if (b && !force && b.updatedAt !== b.syncedAt) return;
     if (b) Object.assign(b, data, { deleted: false });
     else { b = { ...data, view: { x: 0, y: 0, s: 1 } }; S.boards.push(b); }
+    LS.set('synced:' + b.id, b.syncedAt);
     await Store.put(b);
     if (b === S.board) {
       if (act) cancelAction();
@@ -1643,7 +1648,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=15').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=16').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
