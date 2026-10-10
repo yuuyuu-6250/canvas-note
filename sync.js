@@ -34,13 +34,25 @@ let user = null;
 let unsub = null;
 let remote = new Map();    // boardId -> 目録の内容
 let pushTimer = 0, firstDirtyAt = 0;
+let ready = false;          // クラウドの目録を一度受け取ったか（受け取るまでは送らない＝上書き事故を防ぐ）
+let retryTimer = 0, retryDelay = 0;
 const chunkCache = new Map(); // `${boardId}/${i}` -> { rev, data }
 
-/* ---------- 処理を1つずつ順番に実行する ---------- */
+/* ---------- 処理を1つずつ順番に実行する。失敗したら間を空けてやり直す ---------- */
 let queue = Promise.resolve();
-const enqueue = fn => (queue = queue.then(fn).catch(err => {
+const enqueue = fn => (queue = queue.then(fn).then(() => { retryDelay = 0; }).catch(err => {
   console.error(err);
   App.setSyncStatus(navigator.onLine ? 'error' : 'offline', err.message);
+  if (!user) return;
+  // 5秒 → 10秒 → 20秒 … 最長1分ごとにやり直す（オフラインの間は、つながったときに）
+  retryDelay = Math.min(60000, retryDelay ? retryDelay * 2 : 5000);
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(() => {
+    if (!navigator.onLine) return;
+    if (ready) { enqueue(reconcile); return; }
+    if (unsub) { unsub(); unsub = null; } // 最初の受け取りで失敗していた → 見張り直す
+    startListening();
+  }, retryDelay);
 }));
 
 const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('タイムアウトしました')), ms))]);
@@ -184,8 +196,15 @@ async function remoteAsBoard(meta) {
 async function reconcile() {
   if (!user) return;
   if (!navigator.onLine) { App.setSyncStatus('offline'); return; }
+  // クラウドの目録をまだ受け取っていない（オフラインで開いた直後など）→ 受け取ったときに改めて
+  if (!ready) { App.setSyncStatus(firstDirtyAt ? 'pending' : 'syncing'); return; }
   App.setSyncStatus('syncing');
+  const dirtyAt = firstDirtyAt;
   firstDirtyAt = 0;
+  try { await reconcileInner(); }
+  catch (e) { if (!firstDirtyAt) firstDirtyAt = dirtyAt || Date.now(); throw e; } // 送れなかった印を残す
+}
+async function reconcileInner() {
   const locals = new Map(App.boards().map(b => [b.id, b]));
 
   for (const meta of remote.values()) {
@@ -228,38 +247,53 @@ async function reconcile() {
   App.setSyncStatus(firstDirtyAt ? 'pending' : 'ok');
 }
 
-/* ---------- 目録を見張る（ドキュメント1つだけ） ---------- */
-async function startListening() {
-  // 目録がまだ無い（旧形式だけ）なら、旧形式の一覧を1回だけ読む
-  const first = await F.getDoc(userDoc());
-  if (!first.exists() || !first.data().boards) {
-    const snap = await F.getDocs(boardsCol());
-    for (const d of snap.docs) remote.set(d.id, { id: d.id, ...d.data(), legacy: true });
-  }
-  if (!user) return;
-  unsub = F.onSnapshot(userDoc(), snap => {
-    if (snap.metadata && snap.metadata.hasPendingWrites) return; // 自分の書き込み
-    const boards = (snap.exists() && snap.data().boards) || {};
-    for (const [id, m] of Object.entries(boards)) remote.set(id, { id, ...m, fmt: 3 });
-    enqueue(reconcile);
-  }, err => App.setSyncStatus('error', err.message));
+/* ---------- 目録を見張る（ドキュメント1つだけ） ----------
+   オフラインで始めても、つながれば Firebase が自動で受け取り、そこから同期が始まる */
+function startListening() {
+  ready = false;
+  // includeMetadataChanges：オフラインで始めて「まだ目録が無い」まま、つながったことも知るため
+  unsub = F.onSnapshot(userDoc(), { includeMetadataChanges: true }, snap => {
+    if (snap.metadata && (snap.metadata.hasPendingWrites || snap.metadata.fromCache)) return; // 自分の書き込み・確かでない内容
+    const boards = (snap.exists() && snap.data().boards) || null;
+    const first = !ready;
+    enqueue(async () => {
+      // 目録がまだ無い（旧形式だけ）なら、旧形式の一覧を1回だけ読む
+      if (first && !boards) {
+        const s = await F.getDocs(boardsCol());
+        for (const d of s.docs) remote.set(d.id, { id: d.id, ...d.data(), legacy: true });
+      }
+      for (const [id, m] of Object.entries(boards || {})) remote.set(id, { id, ...m, fmt: 3 });
+      ready = true;
+      await reconcile();
+    });
+  }, err => {
+    App.setSyncStatus('error', err.message);
+    // 見張りが止まった → 少し待ってやり直す
+    if (unsub) { unsub(); unsub = null; }
+    setTimeout(() => { if (user && !unsub) startListening(); }, 10000);
+  });
 }
 
 A.onAuthStateChanged(auth, u => {
   user = u;
   if (unsub) { unsub(); unsub = null; }
   remote = new Map();
+  ready = false;
   App.setSyncUser(u ? (u.email || u.displayName || 'ログイン中') : null);
-  if (u) { App.setSyncStatus('syncing'); startListening().catch(err => App.setSyncStatus('error', err.message)); }
+  if (u) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); }
   else App.setSyncStatus('signedout');
 });
 A.getRedirectResult(auth).catch(err => App.setSyncStatus('error', err.message));
 
 const pushSoon = () => { clearTimeout(pushTimer); enqueue(reconcile); };
-window.addEventListener('online', pushSoon);
+window.addEventListener('online', () => { retryDelay = 0; pushSoon(); });
 window.addEventListener('offline', () => user && App.setSyncStatus('offline'));
 // 画面を離れるときは待たずに送る
-document.addEventListener('visibilitychange', () => { if (user && document.hidden && firstDirtyAt) pushSoon(); });
+document.addEventListener('visibilitychange', () => {
+  if (!user) return;
+  if (document.hidden) { if (firstDirtyAt) pushSoon(); }
+  else if (firstDirtyAt && navigator.onLine) pushSoon(); // 戻ってきたとき、送れていないものがあれば
+});
 window.addEventListener('pagehide', () => { if (user && firstDirtyAt) pushSoon(); });
 
 window.Sync = {

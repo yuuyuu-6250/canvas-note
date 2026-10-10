@@ -1753,11 +1753,35 @@ applyTheme();
 renderSync();
 window.addEventListener('resize', resize);
 resize();
+// 同期の仕組みを読み込む。読み込めなかったら（オフラインなど）、つながったときにもう一度
+let syncTries = 0;
+function startSync() {
+  if (!window.FIREBASE_CONFIG || window.Sync) return;
+  App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
+  const url = './sync.js?v=18' + (syncTries++ ? '&r=' + syncTries : '');
+  return import(url)
+    .then(() => swCacheNow())
+    .catch(err => {
+      App.setSyncStatus(navigator.onLine ? 'error' : 'offline', '同期を開始できませんでした（' + err.message + '）');
+      window.addEventListener('online', startSync, { once: true });
+    });
+}
+
+/* ---------- オフラインでも開けるように（Service Worker） ---------- */
+function swCacheNow() {
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller && !navigator.serviceWorker.ready) return;
+  navigator.serviceWorker.ready.then(reg => {
+    const page = location.href.split('#')[0];
+    const extra = ['manifest.webmanifest', 'icon.svg'].map(f => new URL(f, location.href).href); // ホーム画面に追加したとき用
+    const urls = [page, ...extra, ...performance.getEntriesByType('resource').map(e => e.name)];
+    if (reg.active) reg.active.postMessage({ type: 'cache', page, urls });
+  }).catch(() => {});
+}
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').then(swCacheNow).catch(() => {});
+}
+
 loadBoards()
-  .then(() => {
-    if (!window.FIREBASE_CONFIG) return;
-    App.setSyncStatus('syncing');
-    return import('./sync.js?v=17').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
-  })
+  .then(startSync)
   .catch(err => toast('データを開けませんでした: ' + err.message));
 
