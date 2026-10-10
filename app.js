@@ -10,11 +10,13 @@
 const Store = (() => {
   let dbp = null, db = null;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('canvas-note', 2);
+    const r = indexedDB.open('canvas-note', 3);
     r.onupgradeneeded = () => {
       const d = r.result;
       if (!d.objectStoreNames.contains('boards')) d.createObjectStore('boards', { keyPath: 'id' });
       if (!d.objectStoreNames.contains('pending')) d.createObjectStore('pending', { keyPath: ['b', 'id'] });
+      // assets：取り込んだ画像（PDF はページごとの画像）{ id, blob, mime, w, h, up: クラウドに送ったか }
+      if (!d.objectStoreNames.contains('assets')) d.createObjectStore('assets', { keyPath: 'id' });
     };
     r.onsuccess = () => res(db = r.result);
     r.onerror = () => rej(r.error);
@@ -41,6 +43,8 @@ const Store = (() => {
     }),
     addPending: (boardId, st) => run('pending', 'readwrite', t => t.objectStore('pending').put({ b: boardId, id: st.id, st })),
     allPending: () => run('pending', 'readonly', t => t.objectStore('pending').getAll()),
+    getAsset: id => run('assets', 'readonly', t => t.objectStore('assets').get(id)),
+    putAsset: rec => run('assets', 'readwrite', t => t.objectStore('assets').put(rec)),
   };
 })();
 
@@ -266,7 +270,74 @@ function pressureShape(st) {
   return g.shape = { body, caps };
 }
 
+/* ---------- 画像（取り込んだ画像・PDF のページ） ----------
+   線と同じ並びに { t: 'img', a: 画像の id, w: 0, p: [左上x, 左上y, 0, 右下x, 右下y, 0] } として入れる。
+   2点の「線」として扱えるので、移動・複製・拡大縮小・元に戻す・同期はそのまま使える。
+   画像そのもの（ファイル）は IndexedDB の assets に置き、表示用に読み込んだものは数を絞って覚えておく */
+const isImg = st => st.t === 'img';
+const bitmaps = new Map();      // 画像の id -> { bm, px, used } または { loading } または { missingAt }
+let bitmapPixels = 0;
+const BITMAP_BUDGET = 48e6;     // 表示用に覚えておく画素数の上限（多すぎると端末のメモリが足りなくなる）
+function getBitmap(id) {
+  const e = bitmaps.get(id);
+  if (e && e.bm) { e.used = performance.now(); return e.bm; }
+  if (!e || (e.missingAt && performance.now() - e.missingAt > 5000)) loadBitmap(id);
+  return null;
+}
+function loadBitmap(id) {
+  const old = bitmaps.get(id);
+  if (old && old.bm) return Promise.resolve(old.bm);
+  if (old && old.loading) return old.loading;
+  const entry = {};
+  bitmaps.set(id, entry);
+  entry.loading = (async () => {
+    let rec = await Store.getAsset(id);
+    // この端末にない → クラウドから取ってくる（別の端末で取り込んだ画像）
+    if (!rec && window.Sync && window.Sync.fetchAsset) rec = await window.Sync.fetchAsset(id).catch(() => null);
+    if (!rec) { entry.loading = null; entry.missingAt = performance.now(); return null; }
+    const bm = await createImageBitmap(rec.blob);
+    Object.assign(entry, { bm, px: bm.width * bm.height, used: performance.now(), loading: null });
+    bitmapPixels += entry.px;
+    // 覚えすぎたら、しばらく使っていないものから手放す
+    if (bitmapPixels > BITMAP_BUDGET) {
+      const old = [...bitmaps.entries()].filter(([, e]) => e.bm && performance.now() - e.used > 1000).sort((a, b) => a[1].used - b[1].used);
+      for (const [k, e] of old) { if (bitmapPixels <= BITMAP_BUDGET) break; e.bm.close(); bitmapPixels -= e.px; bitmaps.delete(k); }
+    }
+    clearTiles(); renderMainSoon();
+    return bm;
+  })().catch(() => { entry.loading = null; entry.missingAt = performance.now(); return null; });
+  return entry.loading;
+}
+function drawImageObj(c, st) {
+  const [x0, y0, , x1, y1] = st.p, bm = getBitmap(st.a);
+  if (bm) {
+    c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
+    c.drawImage(bm, x0, y0, x1 - x0, y1 - y0);
+  } else { // 読み込み中
+    const m = c.getTransform(), k = Math.hypot(m.a, m.b) || 1;
+    c.fillStyle = 'rgba(148,163,184,.15)'; c.fillRect(x0, y0, x1 - x0, y1 - y0);
+    c.strokeStyle = 'rgba(148,163,184,.6)'; c.lineWidth = 1.5 * DPR / k; c.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  }
+}
+// 画像が投げ縄にかかっているか（四隅のどれかが中、投げ縄の点が画像の中、辺どうしが交わる）
+function imgTouchesPoly(st, poly) {
+  const [x0, y0, , x1, y1] = st.p, cs = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  if (cs.some(p => pointInPoly(p.x, p.y, poly))) return true;
+  if (poly.some(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)) return true;
+  for (let i = 0; i < 4; i++) for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) if (segsCross(cs[i], cs[(i + 1) % 4], poly[j], poly[k])) return true;
+  return false;
+}
+// その位置にある、いちばん上の画像
+function imageAt(w) {
+  for (let i = S.strokes.length - 1; i >= 0; i--) {
+    const st = S.strokes[i];
+    if (isImg(st) && w.x >= st.p[0] && w.x <= st.p[3] && w.y >= st.p[1] && w.y <= st.p[4]) return st;
+  }
+  return null;
+}
+
 function drawStroke(c, st, th = T) {
+  if (st.t === 'img') { drawImageObj(c, st); return; }
   const col = inkColor(st.c, th);
   if (st.pr && st.p.length >= 6) {
     const s = pressureShape(st);
@@ -662,7 +733,7 @@ function eraseTo(x, y) {
   const grow = b => { hit.x0 = Math.min(hit.x0, b.x0); hit.y0 = Math.min(hit.y0, b.y0); hit.x1 = Math.max(hit.x1, b.x1); hit.y1 = Math.max(hit.y1, b.y1); };
   for (const st of S.strokes) {
     const bb = bbox(st);
-    if (bb.x1 < ex0 || bb.x0 > ex1 || bb.y1 < ey0 || bb.y0 > ey1) { res.push(st); continue; }
+    if (isImg(st) || bb.x1 < ex0 || bb.x0 > ex1 || bb.y1 < ey0 || bb.y0 > ey1) { res.push(st); continue; } // 画像は消しゴムでは消さない
     if (partial) {
       const parts = splitStroke(st, a, w, r);
       if (parts) { didChange = true; grow(bb); res.push(...parts); } else res.push(st);
@@ -696,6 +767,7 @@ function selectByLasso(poly) {
   setSelection(set.size ? set : null);
 }
 function strokeTouchesPoly(st, poly) {
+  if (isImg(st)) return imgTouchesPoly(st, poly);
   const p = st.p, n = p.length / 3;
   for (let i = 0; i < n; i++) if (pointInPoly(p[i * 3], p[i * 3 + 1], poly)) return true;
   // 点と点の間だけが中を通っている場合（素早く描いた線など）
@@ -773,6 +845,8 @@ function updateScale(e) {
   } else {
     if (a.h.cx) sx = Math.max(MIN, (tx - a.ax) / (a.hx - a.ax));
     if (a.h.cy) sy = Math.max(MIN, (ty - a.ay) / (a.hy - a.ay));
+    // 画像が入っているときは、辺のつまみでも縦横比を保つ（画像がゆがまないように）
+    if (!(a.h.cx && a.h.cy) && [...S.sel.set].some(isImg)) { if (a.h.cx) sy = sx; else sx = sy; }
   }
   S.sel.tf = { ax: a.ax, ay: a.ay, sx, sy };
   S.sel.preview = [...S.sel.set].map(st => scaleStroke(st, a.ax, a.ay, sx, sy));
@@ -839,7 +913,7 @@ function duplicateSelection() {
   pushUndo(before);
 }
 function recolorSelection(color) {
-  if (S.sel) mapSelection(st => ({ ...st, c: color }));
+  if (S.sel) mapSelection(st => (isImg(st) ? st : { ...st, c: color }));
 }
 
 /* =========================================================
@@ -1093,7 +1167,8 @@ function onUp(e) {
     case 'lasso': {
       const poly = S.lasso;
       S.lasso = null;
-      if (poly.length > 2) selectByLasso(poly); else setSelection(null);
+      if (poly.length > 2) selectByLasso(poly);
+      else { const img = imageAt(poly[0]); setSelection(img ? new Set([img]) : null); } // 画像をタップ → その画像を選ぶ
       break;
     }
     case 'move': commitMove(); break;
@@ -1177,6 +1252,7 @@ const ICONS = {
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
   'folder-plus': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 10.5v5M9.5 13h5"/>',
   'folder-move': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 13h6M12.5 10.5 15 13l-2.5 2.5"/>',
@@ -1374,9 +1450,10 @@ function download(blob, name) {
 }
 const safeName = s => (s || 'board').replace(/[\\/:*?"<>|]/g, '_');
 
-function exportPNG() {
+async function exportPNG() {
   const b = contentBox(S.strokes);
   if (!b) { toast('まだ何も描かれていません'); return; }
+  await Promise.all(S.strokes.filter(isImg).map(st => loadBitmap(st.a))); // 画像を読み込み終えてから
   const pad = 40;
   let scale = 2;
   const bw = b.x1 - b.x0 + pad * 2, bh = b.y1 - b.y0 + pad * 2;
@@ -1397,7 +1474,14 @@ async function exportJSON() {
   saveNow();
   // メモリ上の最新の内容を書き出す（保存の書き込み待ちがあっても漏れないように）
   const boards = visibleBoards().map(b => (b === S.board ? { ...b, strokes: S.strokes, view: { ...S.view } } : b));
-  const data = { app: 'canvas-note', version: 1, exportedAt: new Date().toISOString(), boards };
+  // 取り込んだ画像も一緒に（base64 の文字列にして入れる）
+  const assets = {};
+  for (const b of boards) for (const st of b.strokes || []) {
+    if (!isImg(st) || assets[st.a]) continue;
+    const rec = await Store.getAsset(st.a);
+    if (rec) assets[st.a] = { mime: rec.mime, w: rec.w, h: rec.h, data: await blobToBase64(rec.blob) };
+  }
+  const data = { app: 'canvas-note', version: 1, exportedAt: new Date().toISOString(), boards, assets };
   const d = new Date();
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   download(new Blob([JSON.stringify(data)], { type: 'application/json' }), `canvas-note-${stamp}.json`);
@@ -1412,6 +1496,9 @@ $('#file-import').addEventListener('change', async e => {
     if (!Array.isArray(data.boards)) throw new Error('形式が違います');
     if (!confirm(`${data.boards.length} 個のボードを読み込みます。同じボードがあれば上書きされます。よろしいですか？`)) return;
     saveNow();
+    for (const [id, a] of Object.entries(data.assets || {})) {
+      await Store.putAsset({ id, mime: a.mime, w: a.w, h: a.h, blob: base64ToBlob(a.data, a.mime), up: false });
+    }
     for (const b of data.boards) {
       if (!b || !b.id || b.deleted || !Array.isArray(b.strokes)) continue;
       delete b.syncedAt;           // 読み込んだものはクラウドにも送り直す
@@ -1422,6 +1509,148 @@ $('#file-import').addEventListener('change', async e => {
     window.Sync?.changed();
     toast('読み込みました');
   } catch (err) { toast('読み込めませんでした: ' + err.message); }
+});
+
+/* =========================================================
+   画像・PDF の取り込み
+   画像は長い辺 2400px まで、PDF は1ページずつ幅 1400px の画像にして保存する。
+   取り込んだものは線の下に置き、選んだ状態にする（そのまま動かす・大きさを変えられる）
+   ========================================================= */
+const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.4.299/';
+let pdfjsP = null;
+const loadPdfJs = () => (pdfjsP = pdfjsP || import(PDFJS + 'pdf.min.mjs').then(m => {
+  m.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.mjs';
+  return m;
+}).catch(err => { pdfjsP = null; throw err; }));
+
+const blobToBase64 = blob => new Promise((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result).split(',')[1]);
+  r.onerror = () => rej(r.error);
+  r.readAsDataURL(blob);
+});
+function base64ToBlob(b64, mime) {
+  const bin = atob(b64), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return new Blob([u], { type: mime });
+}
+const canvasBlob = (cv, mime, q) => new Promise(r => cv.toBlob(r, mime, q));
+// 透明な部分があるか（小さく縮めて調べる）
+function hasAlpha(bm) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 48;
+  const c = cv.getContext('2d'); c.drawImage(bm, 0, 0, 48, 48);
+  const d = c.getImageData(0, 0, 48, 48).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+  return false;
+}
+async function saveAsset(blob, mime, w, h) {
+  const id = uid();
+  await Store.putAsset({ id, blob, mime, w, h, up: false });
+  return { id, w, h };
+}
+async function imageToAsset(file) {
+  const bm = await createImageBitmap(file);
+  const k = Math.min(1, 2400 / Math.max(bm.width, bm.height));
+  const w = Math.max(1, Math.round(bm.width * k)), h = Math.max(1, Math.round(bm.height * k));
+  // 小さくて扱える形式ならそのまま、そうでなければ縮めて保存し直す
+  if (k === 1 && /^image\/(jpeg|png|webp)$/.test(file.type) && file.size < 1.5e6) { bm.close(); return saveAsset(file, file.type, w, h); }
+  const alpha = file.type !== 'image/jpeg' && hasAlpha(bm);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d');
+  if (!alpha) { c.fillStyle = '#fff'; c.fillRect(0, 0, w, h); }
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(bm, 0, 0, w, h);
+  bm.close();
+  const mime = alpha ? 'image/png' : 'image/jpeg';
+  return saveAsset(await canvasBlob(cv, mime, 0.85), mime, w, h);
+}
+async function pdfToAssets(file, onPage) {
+  const pdfjs = await loadPdfJs();
+  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const doc = await task.promise;
+  const out = [];
+  try {
+    for (let i = 1; i <= doc.numPages; i++) {
+      onPage(i, doc.numPages);
+      const page = await doc.getPage(i);
+      const v1 = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(1400 / v1.width, 2000 / v1.height) });
+      const cv = document.createElement('canvas');
+      cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+      const c = cv.getContext('2d');
+      c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+      await page.render({ canvasContext: c, canvas: cv, viewport: vp }).promise;
+      out.push(await saveAsset(await canvasBlob(cv, 'image/jpeg', 0.85), 'image/jpeg', cv.width, cv.height));
+      page.cleanup();
+      cv.width = cv.height = 0;
+    }
+  } finally { await task.destroy(); } // 読み込みの後片付け（PDF の作業用スレッドも止まる）
+  return out;
+}
+
+let importing = false;
+async function importFiles(files, at) {
+  const list = [...files].filter(f => /^image\//.test(f.type) || f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+  if (!list.length) { toast('画像か PDF を選んでください'); return; }
+  if (importing) { toast('取り込み中です'); return; }
+  importing = true;
+  try {
+    const assets = [];
+    for (const f of list) {
+      try {
+        if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+          assets.push(...await pdfToAssets(f, (i, n) => toast(`PDF を読み込み中… ${i} / ${n} ページ`)));
+        } else {
+          toast('画像を読み込み中…');
+          assets.push(await imageToAsset(f));
+        }
+      } catch (err) {
+        console.error(err);
+        toast(`「${f.name}」を読み込めませんでした（${err.message}）`);
+      }
+    }
+    if (!assets.length) return;
+    // 置き場所：画面の幅の 7 割くらい（最大 720px 分）の大きさで、縦に並べる
+    const s = S.view.s, colW = Math.min(W * 0.7, 720) / s, gap = 24 / s;
+    const c = at || toWorld(W / 2, H / 2);
+    let y = c.y - (colW * assets[0].h / assets[0].w) / 2;
+    const items = assets.map(a => {
+      const h = colW * a.h / a.w, x0 = c.x - colW / 2;
+      const st = { id: uid(), t: 'img', a: a.id, c: '', w: 0, pr: false, p: [x0, y, 0, x0 + colW, y + h, 0] };
+      y += h + gap;
+      return st;
+    });
+    // 画像は線の下へ（いちばん下にある画像の続き）
+    const before = S.strokes.slice();
+    let at0 = 0;
+    while (at0 < S.strokes.length && isImg(S.strokes[at0])) at0++;
+    S.strokes = [...S.strokes.slice(0, at0), ...items, ...S.strokes.slice(at0)];
+    pushUndo(before);
+    // そのまま動かしたり大きさを変えたりできるよう、選んだ状態にする
+    setTool('lasso');
+    setSelection(new Set(items));
+    toast(assets.length > 1 ? `${assets.length} 枚取り込みました` : '取り込みました');
+  } finally { importing = false; }
+}
+
+$('#btn-import').onclick = () => $('#file-media').click();
+$('#file-media').addEventListener('change', e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if (files.length) importFiles(files);
+});
+// ファイルをキャンバスに落とす
+window.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+window.addEventListener('drop', e => {
+  if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+  e.preventDefault();
+  importFiles(e.dataTransfer.files, toWorld(e.clientX, e.clientY));
+});
+// 貼り付け（スクリーンショットなど）
+document.addEventListener('paste', e => {
+  if (typing() || !e.clipboardData) return;
+  const files = [...e.clipboardData.files].filter(f => /^image\//.test(f.type) || f.type === 'application/pdf');
+  if (files.length) { e.preventDefault(); importFiles(files); }
 });
 
 /* =========================================================
@@ -1678,6 +1907,9 @@ function renderSync() {
 
 window.App = {
   boards: () => S.boards,
+  getAsset: id => Store.getAsset(id),
+  putAsset: rec => Store.putAsset(rec),
+  blobToBase64, base64ToBlob,
   strokesOf: b => (b === S.board ? S.strokes : b.strokes || []),
   saveNow,
   persist(b) {
@@ -1758,7 +1990,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=18' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=19' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {

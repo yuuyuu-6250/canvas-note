@@ -10,7 +10,9 @@ const SDK_HOST = 'www.gstatic.com';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
-const cacheable = url => url.origin === self.location.origin || (url.host === SDK_HOST && url.pathname.startsWith('/firebasejs/'));
+const cacheable = url => url.origin === self.location.origin
+  || (url.host === SDK_HOST && url.pathname.startsWith('/firebasejs/'))
+  || (url.host === 'cdnjs.cloudflare.com' && url.pathname.startsWith('/ajax/libs/pdf.js/')); // PDF の読み込み部品
 // ページは「…/」と「…/index.html」を同じものとしてしまう（? 以降は見ない）
 const pageKey = url => url.origin + (url.pathname.endsWith('/') ? url.pathname + 'index.html' : url.pathname);
 

@@ -101,8 +101,51 @@ function localChunks(b) {
   return m;
 }
 
+/* ---------- 画像（取り込んだ画像・PDF のページ） ----------
+     users/{uid}/assets/{id}          { mime, w, h, n: 分けた数 }
+     users/{uid}/assets/{id}/p/{i}    { d: base64 の一部 }
+   画像は作り直さないので、一度送れば終わり。受け取りも、表示に必要になったときに1回だけ */
+const ASSET_PART = 900000; // 1ドキュメント 1MB 制限より小さく（文字数）
+const assetDoc = id => F.doc(db, 'users', user.uid, 'assets', id);
+const assetPart = (id, i) => F.doc(db, 'users', user.uid, 'assets', id, 'p', String(i));
+async function uploadAssets(b) {
+  const ids = [...new Set(App.strokesOf(b).filter(s => s.t === 'img').map(s => s.a))];
+  for (const id of ids) {
+    const rec = await App.getAsset(id);
+    if (!rec || rec.up) continue; // この端末にない（＝別の端末から来た、もう送ってある）か、送り済み
+    const b64 = await App.blobToBase64(rec.blob), n = Math.max(1, Math.ceil(b64.length / ASSET_PART));
+    const batch = F.writeBatch(db);
+    for (let i = 0; i < n; i++) batch.set(assetPart(id, i), { d: b64.slice(i * ASSET_PART, (i + 1) * ASSET_PART) });
+    batch.set(assetDoc(id), { mime: rec.mime, w: rec.w, h: rec.h, n }); // 部品を全部置いてから目印（同じ書き込みの中）
+    await withTimeout(batch.commit(), 60000);
+    await App.putAsset({ ...rec, up: true });
+  }
+}
+// 別の端末で取り込んだ画像を受け取る（同じ画像を同時に頼まれても1回だけ）
+const fetching = new Map();
+function fetchAsset(id) {
+  if (!user || !ready) return Promise.reject(new Error('同期の準備ができていません'));
+  if (fetching.has(id)) return fetching.get(id);
+  const p = (async () => {
+    const m = await F.getDoc(assetDoc(id));
+    if (!m.exists()) return null; // まだ届いていない（送った側の同期待ち）
+    const { mime, w, h, n } = m.data(), parts = [];
+    for (let i = 0; i < n; i++) {
+      const d = await F.getDoc(assetPart(id, i));
+      if (!d.exists()) return null;
+      parts.push(d.data().d);
+    }
+    const rec = { id, mime, w, h, blob: App.base64ToBlob(parts.join(''), mime), up: true };
+    await App.putAsset(rec);
+    return rec;
+  })().finally(() => fetching.delete(id));
+  fetching.set(id, p);
+  return p;
+}
+
 /* ---------- アップロード（変わったチャンクだけ） ---------- */
 async function push(b) {
+  if (!b.deleted) await uploadAssets(b); // 画像を先に（ほかの端末で線より先に画像が無いと困るので）
   const updatedAt = b.updatedAt;
   const chunks = b.deleted ? [] : toChunks(App.strokesOf(b));
   const revs = chunks.map(hashStr);
@@ -308,6 +351,7 @@ window.Sync = {
   },
   signOut: () => A.signOut(auth),
   syncNow: pushSoon,
+  fetchAsset,
   // ローカルで変更があったら呼ばれる。手を止めて PUSH_IDLE 後に送る（最長 PUSH_MAX）
   changed() {
     if (!user) return;

@@ -18,7 +18,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -48,6 +48,7 @@
     <button class="ibtn tool" data-tool="hand" data-icon="hand" title="移動 (H / Space)"></button>
     <span class="sep"></span>
     <button class="ibtn" id="btn-ruler" data-icon="ruler" title="定規 (R)"></button>
+    <button class="ibtn" id="btn-import" data-icon="image" title="画像・PDF を取り込む（ドラッグ＆ドロップ・貼り付けでも可）"></button>
     <span class="sep"></span>
     <button class="ibtn" id="btn-undo" data-icon="undo" title="元に戻す (Ctrl+Z)"></button>
     <button class="ibtn" id="btn-redo" data-icon="redo" title="やり直す (Ctrl+Shift+Z)"></button>
@@ -130,11 +131,12 @@
 <div id="pop-move" class="pop chip" hidden></div>
 
 <input type="file" id="file-import" accept="application/json,.json" hidden>
+<input type="file" id="file-media" accept="image/*,application/pdf,.pdf" multiple hidden>
 <div id="toast" hidden></div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=18"></script>
-<script src="ruler.js?v=18"></script>
-<script src="app.js?v=18"></script>
+<script src="firebase-config.js?v=19"></script>
+<script src="ruler.js?v=19"></script>
+<script src="app.js?v=19"></script>
 </body>
 </html>
