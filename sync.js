@@ -108,11 +108,25 @@ function localChunks(b) {
 const ASSET_PART = 900000; // 1ドキュメント 1MB 制限より小さく（文字数）
 const assetDoc = id => F.doc(db, 'users', user.uid, 'assets', id);
 const assetPart = (id, i) => F.doc(db, 'users', user.uid, 'assets', id, 'p', String(i));
+// 画像を送る。「この端末だけ」（nc）の画像は送らず、前に送ってあればクラウドから消して容量を空ける
 async function uploadAssets(b) {
-  const ids = [...new Set(App.strokesOf(b).filter(s => s.t === 'img').map(s => s.a))];
-  for (const id of ids) {
+  const want = new Map(); // 画像の id -> クラウドに置くか（同じ画像を使うどれか1つでも「置く」なら置く）
+  for (const s of App.strokesOf(b)) if (s.t === 'img') want.set(s.a, want.get(s.a) || !s.nc);
+  for (const [id, cloud] of want) {
     const rec = await App.getAsset(id);
-    if (!rec || rec.up) continue; // この端末にない（＝別の端末から来た、もう送ってある）か、送り済み
+    if (!rec) continue; // この端末にない（別の端末から来た画像。送るのはその端末）
+    if (!cloud) {
+      if (rec.up) {
+        const n = Math.max(1, Math.ceil(Math.ceil(rec.blob.size / 3) * 4 / ASSET_PART)); // base64 の長さから分けた数
+        const batch = F.writeBatch(db);
+        batch.delete(assetDoc(id));
+        for (let i = 0; i < n; i++) batch.delete(assetPart(id, i));
+        await withTimeout(batch.commit(), 30000);
+        await App.putAsset({ ...rec, up: false });
+      }
+      continue;
+    }
+    if (rec.up) continue; // 送り済み
     const b64 = await App.blobToBase64(rec.blob), n = Math.max(1, Math.ceil(b64.length / ASSET_PART));
     const batch = F.writeBatch(db);
     for (let i = 0; i < n; i++) batch.set(assetPart(id, i), { d: b64.slice(i * ASSET_PART, (i + 1) * ASSET_PART) });

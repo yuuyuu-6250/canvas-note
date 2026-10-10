@@ -18,7 +18,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=19">
+<link rel="stylesheet" href="style.css?v=20">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -62,6 +62,7 @@
 <div id="selbar" class="chip" hidden>
   <div class="swatches" id="sel-colors"></div>
   <span class="sep"></span>
+  <button class="toggle" id="sel-cloud" hidden></button>
   <button class="ibtn" id="sel-dup" data-icon="copy" title="複製"></button>
   <button class="ibtn danger" id="sel-del" data-icon="trash" title="削除 (Delete)"></button>
 </div>
@@ -133,10 +134,18 @@
 <input type="file" id="file-import" accept="application/json,.json" hidden>
 <input type="file" id="file-media" accept="image/*,application/pdf,.pdf" multiple hidden>
 <div id="toast" hidden></div>
+<!-- 確認用の小さな画面（選択肢つき） -->
+<div id="dlg" hidden>
+  <div class="dlg-box chip" role="dialog" aria-modal="true">
+    <div class="dlg-title"></div>
+    <div class="dlg-msg"></div>
+    <div class="dlg-btns"></div>
+  </div>
+</div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=19"></script>
-<script src="ruler.js?v=19"></script>
-<script src="app.js?v=19"></script>
+<script src="firebase-config.js?v=20"></script>
+<script src="ruler.js?v=20"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>

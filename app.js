@@ -278,13 +278,15 @@ const isImg = st => st.t === 'img';
 const bitmaps = new Map();      // 画像の id -> { bm, px, used } または { loading } または { missingAt }
 let bitmapPixels = 0;
 const BITMAP_BUDGET = 48e6;     // 表示用に覚えておく画素数の上限（多すぎると端末のメモリが足りなくなる）
-function getBitmap(id) {
+// fetch：この端末に無いとき、クラウドから取ってくるか（「この端末だけ」の画像は取りに行かない）
+function getBitmap(id, fetch = true) {
   const e = bitmaps.get(id);
   if (e && e.bm) { e.used = performance.now(); return e.bm; }
-  if (!e || (e.missingAt && performance.now() - e.missingAt > 5000)) loadBitmap(id);
+  if (!e || (e.missingAt && performance.now() - e.missingAt > 5000)) loadBitmap(id, fetch);
   return null;
 }
-function loadBitmap(id) {
+const bitmapMissing = id => { const e = bitmaps.get(id); return !!(e && e.missingAt); };
+function loadBitmap(id, fetch = true) {
   const old = bitmaps.get(id);
   if (old && old.bm) return Promise.resolve(old.bm);
   if (old && old.loading) return old.loading;
@@ -293,8 +295,13 @@ function loadBitmap(id) {
   entry.loading = (async () => {
     let rec = await Store.getAsset(id);
     // この端末にない → クラウドから取ってくる（別の端末で取り込んだ画像）
-    if (!rec && window.Sync && window.Sync.fetchAsset) rec = await window.Sync.fetchAsset(id).catch(() => null);
-    if (!rec) { entry.loading = null; entry.missingAt = performance.now(); return null; }
+    if (!rec && fetch && window.Sync && window.Sync.fetchAsset) rec = await window.Sync.fetchAsset(id).catch(() => null);
+    if (!rec) {
+      // 無かった。「この端末だけ」の画像はこの先も来ないので探し直さない（クラウドの画像は少し待ってもう一度）
+      entry.loading = null; entry.missingAt = performance.now() + (fetch ? 0 : 1e12);
+      clearTiles(); renderMainSoon(); // 「この端末にない画像」の表示にする
+      return null;
+    }
     const bm = await createImageBitmap(rec.blob);
     Object.assign(entry, { bm, px: bm.width * bm.height, used: performance.now(), loading: null });
     bitmapPixels += entry.px;
@@ -309,14 +316,19 @@ function loadBitmap(id) {
   return entry.loading;
 }
 function drawImageObj(c, st) {
-  const [x0, y0, , x1, y1] = st.p, bm = getBitmap(st.a);
+  const [x0, y0, , x1, y1] = st.p, bm = getBitmap(st.a, !st.nc);
   if (bm) {
     c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
     c.drawImage(bm, x0, y0, x1 - x0, y1 - y0);
-  } else { // 読み込み中
-    const m = c.getTransform(), k = Math.hypot(m.a, m.b) || 1;
-    c.fillStyle = 'rgba(148,163,184,.15)'; c.fillRect(x0, y0, x1 - x0, y1 - y0);
-    c.strokeStyle = 'rgba(148,163,184,.6)'; c.lineWidth = 1.5 * DPR / k; c.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  } else { // 読み込み中、またはこの端末に無い画像
+    const m = c.getTransform(), k = Math.hypot(m.a, m.b) || 1, w = x1 - x0, h = y1 - y0;
+    c.fillStyle = 'rgba(148,163,184,.15)'; c.fillRect(x0, y0, w, h);
+    c.strokeStyle = 'rgba(148,163,184,.6)'; c.lineWidth = 1.5 * DPR / k; c.strokeRect(x0, y0, w, h);
+    if (bitmapMissing(st.a)) {
+      const fs = Math.min(w / 12, 15 * DPR / k);
+      c.fillStyle = 'rgba(100,116,139,.9)'; c.font = `${fs}px system-ui, sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText(st.nc ? 'この端末にない画像' : '画像を受け取れませんでした', x0 + w / 2, y0 + h / 2);
+    }
   }
 }
 // 画像が投げ縄にかかっているか（四隅のどれかが中、投げ縄の点が画像の中、辺どうしが交わる）
@@ -326,6 +338,17 @@ function imgTouchesPoly(st, poly) {
   if (poly.some(p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)) return true;
   for (let i = 0; i < 4; i++) for (let j = 0, k = poly.length - 1; j < poly.length; k = j++) if (segsCross(cs[i], cs[(i + 1) % 4], poly[j], poly[k])) return true;
   return false;
+}
+// 画像と同じまとまり（同じ PDF）の全ページと、その上に書いた線（線の中心がページの上にあるもの）
+function groupWithInk(img) {
+  const pages = img.g ? S.strokes.filter(st => isImg(st) && st.g === img.g) : [img];
+  const set = new Set(pages);
+  for (const st of S.strokes) {
+    if (isImg(st)) continue;
+    const b = bbox(st), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
+    if (pages.some(pg => cx >= pg.p[0] && cx <= pg.p[3] && cy >= pg.p[1] && cy <= pg.p[4])) set.add(st);
+  }
+  return set;
 }
 // その位置にある、いちばん上の画像
 function imageAt(w) {
@@ -900,12 +923,13 @@ function deleteSelection() {
 }
 function duplicateSelection() {
   if (!S.sel) return;
-  const before = S.strokes.slice(), off = 24 / S.view.s, ns = new Set();
+  const before = S.strokes.slice(), off = 24 / S.view.s, ns = new Set(), newGroup = new Map();
   for (const st of S.strokes) {
     if (!S.sel.set.has(st)) continue;
     const p = st.p.slice();
     for (let i = 0; i < p.length; i += 3) { p[i] += off; p[i + 1] += off; }
     const n = { ...st, id: uid(), p };
+    if (st.g) { if (!newGroup.has(st.g)) newGroup.set(st.g, uid()); n.g = newGroup.get(st.g); } // 複製は別のまとまり
     ns.add(n);
   }
   S.strokes = S.strokes.concat([...ns]);
@@ -1168,7 +1192,7 @@ function onUp(e) {
       const poly = S.lasso;
       S.lasso = null;
       if (poly.length > 2) selectByLasso(poly);
-      else { const img = imageAt(poly[0]); setSelection(img ? new Set([img]) : null); } // 画像をタップ → その画像を選ぶ
+      else { const img = imageAt(poly[0]); setSelection(img ? groupWithInk(img) : null); } // 画像をタップ → その PDF 全体と、上に書いた線を選ぶ
       break;
     }
     case 'move': commitMove(); break;
@@ -1343,6 +1367,43 @@ function renderSelColors() {
   const box = $('#sel-colors');
   box.innerHTML = PEN_COLORS.map(c => `<button class="sw" data-color="${c}" title="${c}"><i style="background:${inkColor(c)}"></i></button>`).join('');
   box.querySelectorAll('[data-color]').forEach(b => b.onclick = () => recolorSelection(b.dataset.color));
+  // 画像を選んでいるときは「クラウドに保存するか」の切り替え
+  const imgs = S.sel ? [...S.sel.set].filter(isImg) : [], cb = $('#sel-cloud');
+  cb.hidden = !imgs.length || !window.FIREBASE_CONFIG;
+  if (!cb.hidden) {
+    const on = imgs.some(st => !st.nc);
+    cb.className = 'toggle' + (on ? ' active' : '');
+    cb.innerHTML = icon('cloud') + `<span>${on ? 'クラウドに保存' : 'この端末だけ'}</span>`;
+    cb.querySelector('svg').style.cssText = 'width:16px;height:16px';
+    cb.title = on ? '押すと「この端末だけ」にします（クラウドのコピーは消して容量を空けます）' : '押すとクラウドにも保存します（ほかの端末でも見られます）';
+    cb.onclick = () => setSelectionCloud(!on);
+  }
+}
+// 選んだ画像をクラウドに保存するか切り替える（実際に送る・消すのは同期のとき）
+function setSelectionCloud(on) {
+  if (!S.sel) return;
+  mapSelection(st => (isImg(st) ? { ...st, nc: !on } : st));
+  toast(on ? 'クラウドにも保存します' : 'この端末だけに保存します（クラウドのコピーは消します）');
+}
+
+/* ---------- 確認用の小さな画面 ---------- */
+function askChoice(title, msg, buttons) {
+  return new Promise(resolve => {
+    const d = $('#dlg');
+    d.querySelector('.dlg-title').textContent = title;
+    d.querySelector('.dlg-msg').textContent = msg;
+    const btns = d.querySelector('.dlg-btns');
+    btns.innerHTML = '';
+    for (const b of buttons) {
+      const el = document.createElement('button');
+      el.textContent = b.label;
+      if (b.primary) el.className = 'primary';
+      el.onclick = () => { d.hidden = true; resolve(b.value); };
+      btns.appendChild(el);
+    }
+    d.hidden = false;
+    btns.lastElementChild.focus();
+  });
 }
 
 /* ---------- ポップオーバー ---------- */
@@ -1595,28 +1656,50 @@ async function importFiles(files, at) {
   if (importing) { toast('取り込み中です'); return; }
   importing = true;
   try {
-    const assets = [];
+    // ファイルごとのまとまり（PDF は全ページで1つ。g が同じものは一緒に選ばれる）
+    const groups = [];
     for (const f of list) {
+      const pdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
       try {
-        if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
-          assets.push(...await pdfToAssets(f, (i, n) => toast(`PDF を読み込み中… ${i} / ${n} ページ`)));
-        } else {
-          toast('画像を読み込み中…');
-          assets.push(await imageToAsset(f));
-        }
+        const assets = pdf
+          ? await pdfToAssets(f, (i, n) => toast(`PDF を読み込み中… ${i} / ${n} ページ`))
+          : (toast('画像を読み込み中…'), [await imageToAsset(f)]);
+        groups.push({ name: f.name, pdf, assets, g: uid(), nc: false });
       } catch (err) {
         console.error(err);
         toast(`「${f.name}」を読み込めませんでした（${err.message}）`);
       }
     }
-    if (!assets.length) return;
+    if (!groups.length) return;
+    // クラウドにも保存するか（ログイン中だけ聞く。PDF はファイルごと、画像はまとめて1回）
+    if (syncState.user) {
+      const cloudMB = async gs => {
+        let n = 0;
+        for (const gr of gs) for (const a of gr.assets) { const r = await Store.getAsset(a.id); n += r ? r.blob.size : 0; }
+        return (n * 4 / 3 / 1e6).toFixed(1); // クラウドでは base64 にするので約 4/3 倍
+      };
+      const note = '\n「この端末だけ」にすると、クラウドの容量を使いません。ほかの端末では灰色の枠になります（上に書いた線は同期されます）。\nあとから、選んだときに出るバーで変えられます。';
+      const choices = [{ label: 'この端末だけ', value: false }, { label: 'クラウドにも保存', value: true, primary: true }];
+      for (const gr of groups.filter(g => g.pdf)) {
+        const on = await askChoice(`「${gr.name}」をクラウドにも保存しますか？`, `${gr.assets.length} ページ・クラウドで約 ${await cloudMB([gr])} MB 使います。` + note, choices);
+        gr.nc = !on;
+      }
+      const imgs = groups.filter(g => !g.pdf);
+      if (imgs.length) {
+        const title = imgs.length > 1 ? `画像 ${imgs.length} 枚をクラウドにも保存しますか？` : `「${imgs[0].name}」をクラウドにも保存しますか？`;
+        const on = await askChoice(title, `クラウドで約 ${await cloudMB(imgs)} MB 使います。` + note, choices);
+        for (const gr of imgs) gr.nc = !on;
+      }
+    }
+    const assets = groups.flatMap(gr => gr.assets.map(a => ({ ...a, g: gr.g, nc: gr.nc })));
     // 置き場所：画面の幅の 7 割くらい（最大 720px 分）の大きさで、縦に並べる
     const s = S.view.s, colW = Math.min(W * 0.7, 720) / s, gap = 24 / s;
     const c = at || toWorld(W / 2, H / 2);
     let y = c.y - (colW * assets[0].h / assets[0].w) / 2;
     const items = assets.map(a => {
       const h = colW * a.h / a.w, x0 = c.x - colW / 2;
-      const st = { id: uid(), t: 'img', a: a.id, c: '', w: 0, pr: false, p: [x0, y, 0, x0 + colW, y + h, 0] };
+      const st = { id: uid(), t: 'img', a: a.id, g: a.g, c: '', w: 0, pr: false, p: [x0, y, 0, x0 + colW, y + h, 0] };
+      if (a.nc) st.nc = true; // この端末だけ（クラウドに送らない）
       y += h + gap;
       return st;
     });
@@ -1990,7 +2073,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=19' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=20' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {

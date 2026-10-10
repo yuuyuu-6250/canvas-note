@@ -273,6 +273,18 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 }
 #toast[hidden] { display: none; }
 
+/* 確認用の小さな画面 */
+#dlg { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; place-items: center; padding: 16px; }
+#dlg[hidden] { display: none; }
+.dlg-box { width: min(420px, 100%); padding: 18px; background: var(--drawer); }
+.dlg-title { font-weight: 700; font-size: 16px; margin-bottom: 8px; word-break: break-all; }
+.dlg-msg { color: var(--muted); font-size: 13px; line-height: 1.6; white-space: pre-line; }
+.dlg-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.dlg-btns button { padding: 9px 14px; border-radius: 10px; background: var(--hover); font-weight: 600; }
+.dlg-btns button.primary { background: var(--accent); color: #fff; }
+#sel-cloud { display: inline-flex; align-items: center; gap: 4px; }
+#sel-cloud[hidden] { display: none; }
+
 /* スマホ：ツールバーを下に */
 @media (max-width: 1000px) {
   #dock { top: auto; bottom: calc(10px + var(--safe-b)); }
