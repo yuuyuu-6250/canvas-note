@@ -18,7 +18,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=20">
+<link rel="stylesheet" href="style.css?v=21">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -128,6 +128,11 @@
     </div>
   </div>
   <ul id="board-list"></ul>
+  <div id="usage" hidden>
+    <div class="usage-head"><span>クラウドの使用量</span><b id="usage-total"></b></div>
+    <div class="usage-bar"><i id="usage-fill"></i></div>
+    <div class="usage-detail" id="usage-detail"></div>
+  </div>
 </aside>
 <div id="pop-move" class="pop chip" hidden></div>
 
@@ -144,8 +149,8 @@
 </div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=20"></script>
-<script src="ruler.js?v=20"></script>
-<script src="app.js?v=20"></script>
+<script src="firebase-config.js?v=21"></script>
+<script src="ruler.js?v=21"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>

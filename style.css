@@ -243,6 +243,16 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #board-list .date { font-size: 12px; color: var(--muted); }
 #board-list .ibtn { width: 32px; height: 32px; color: var(--muted); flex: none; }
 #board-list .ibtn svg { width: 17px; height: 17px; }
+/* クラウドの使用量（ボード一覧の下） */
+#usage { border-top: 1px solid var(--line); padding: 12px 18px calc(14px + var(--safe-b)); }
+#usage[hidden] { display: none; }
+.usage-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); }
+.usage-head b { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.usage-bar { height: 6px; border-radius: 3px; background: var(--hover); margin: 8px 0 6px; overflow: hidden; }
+.usage-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .3s; }
+.usage-bar i.warn { background: #f59e0b; }
+.usage-bar i.full { background: var(--danger); }
+.usage-detail { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* フォルダ */
 .drawer-actions { display: flex; gap: 2px; }
 #board-list li.folder { padding-left: 4px; gap: 2px; }

@@ -115,25 +115,55 @@ async function uploadAssets(b) {
   for (const [id, cloud] of want) {
     const rec = await App.getAsset(id);
     if (!rec) continue; // この端末にない（別の端末から来た画像。送るのはその端末）
+    const b64len = Math.ceil(rec.blob.size / 3) * 4; // クラウドでの大きさ（base64）
     if (!cloud) {
       if (rec.up) {
-        const n = Math.max(1, Math.ceil(Math.ceil(rec.blob.size / 3) * 4 / ASSET_PART)); // base64 の長さから分けた数
+        const n = Math.max(1, Math.ceil(b64len / ASSET_PART)); // 分けた数
         const batch = F.writeBatch(db);
         batch.delete(assetDoc(id));
         for (let i = 0; i < n; i++) batch.delete(assetPart(id, i));
+        batch.set(userDoc(), { assets: { [id]: F.deleteField() } }, { merge: true }); // 使用量の記録からも外す
         await withTimeout(batch.commit(), 30000);
+        delete remoteAssets[id];
         await App.putAsset({ ...rec, up: false });
       }
       continue;
     }
-    if (rec.up) continue; // 送り済み
+    if (rec.up) {
+      // 送り済み。使用量の記録に無ければ足す（この機能より前に送った画像）
+      if (!(id in remoteAssets)) {
+        await withTimeout(F.setDoc(userDoc(), { assets: { [id]: b64len } }, { merge: true }), 30000);
+        remoteAssets[id] = b64len;
+      }
+      continue;
+    }
     const b64 = await App.blobToBase64(rec.blob), n = Math.max(1, Math.ceil(b64.length / ASSET_PART));
     const batch = F.writeBatch(db);
     for (let i = 0; i < n; i++) batch.set(assetPart(id, i), { d: b64.slice(i * ASSET_PART, (i + 1) * ASSET_PART) });
     batch.set(assetDoc(id), { mime: rec.mime, w: rec.w, h: rec.h, n }); // 部品を全部置いてから目印（同じ書き込みの中）
+    batch.set(userDoc(), { assets: { [id]: b64.length } }, { merge: true }); // 使用量の記録
     await withTimeout(batch.commit(), 60000);
+    remoteAssets[id] = b64.length;
     await App.putAsset({ ...rec, up: true });
   }
+  App.usageChanged();
+}
+
+/* ---------- クラウドの使用量（目録に書いた大きさの合計。読み込みは増えない） ---------- */
+let remoteAssets = {}; // 画像の id -> クラウドでの大きさ（文字数）
+function usage() {
+  if (!user || !ready) return null;
+  let boards = 0, assets = 0;
+  for (const m of remote.values()) {
+    if (m.deleted) continue;
+    if (typeof m.bytes === 'number') boards += m.bytes;
+    else { // 大きさを記録する前に送ったボード：端末の線から見積もる
+      const b = App.boards().find(x => x.id === m.id);
+      if (b) boards += toChunks(App.strokesOf(b)).reduce((n, c) => n + c.length, 0);
+    }
+  }
+  for (const v of Object.values(remoteAssets)) assets += v;
+  return { boards, assets, total: boards + assets };
 }
 // 別の端末で取り込んだ画像を受け取る（同じ画像を同時に頼まれても1回だけ）
 const fetching = new Map();
@@ -170,6 +200,7 @@ async function push(b) {
   const meta = {
     name: b.name || '無題', createdAt: b.createdAt || updatedAt, updatedAt, bg: b.bg || null,
     deleted: !!b.deleted, folder: b.folder || null, revs,
+    bytes: chunks.reduce((n, c) => n + c.length, 0), // 使用量の表示用（線のデータの大きさ）
   };
   const batch = F.writeBatch(db);
   batch.set(userDoc(), { boards: { [b.id]: meta } }, { merge: true });
@@ -185,6 +216,7 @@ async function push(b) {
   b.syncedAt = updatedAt;
   if (b.deleted) await App.removeLocal(b.id);  // 削除をクラウドに伝えたので端末からは消してよい
   else await App.persist(b);
+  App.usageChanged();
 }
 
 /* ---------- ダウンロード ---------- */
@@ -312,6 +344,7 @@ function startListening() {
   unsub = F.onSnapshot(userDoc(), { includeMetadataChanges: true }, snap => {
     if (snap.metadata && (snap.metadata.hasPendingWrites || snap.metadata.fromCache)) return; // 自分の書き込み・確かでない内容
     const boards = (snap.exists() && snap.data().boards) || null;
+    remoteAssets = { ...((snap.exists() && snap.data().assets) || {}) };
     const first = !ready;
     enqueue(async () => {
       // 目録がまだ無い（旧形式だけ）なら、旧形式の一覧を1回だけ読む
@@ -321,6 +354,7 @@ function startListening() {
       }
       for (const [id, m] of Object.entries(boards || {})) remote.set(id, { id, ...m, fmt: 3 });
       ready = true;
+      App.usageChanged();
       await reconcile();
     });
   }, err => {
@@ -335,6 +369,7 @@ A.onAuthStateChanged(auth, u => {
   user = u;
   if (unsub) { unsub(); unsub = null; }
   remote = new Map();
+  remoteAssets = {};
   ready = false;
   App.setSyncUser(u ? (u.email || u.displayName || 'ログイン中') : null);
   if (u) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); }
@@ -366,6 +401,7 @@ window.Sync = {
   signOut: () => A.signOut(auth),
   syncNow: pushSoon,
   fetchAsset,
+  usage,
   // ローカルで変更があったら呼ばれる。手を止めて PUSH_IDLE 後に送る（最長 PUSH_MAX）
   changed() {
     if (!user) return;

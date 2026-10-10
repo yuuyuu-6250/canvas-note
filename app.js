@@ -1959,7 +1959,21 @@ async function createBoard(folder) {
 $('#btn-new').onclick = () => createBoard(null);
 $('#btn-new-folder').onclick = () => addFolder();
 
-function openDrawer() { renderBoardList(); $('#drawer').classList.add('open'); $('#drawer-scrim').hidden = false; }
+function openDrawer() { renderBoardList(); renderUsage(); $('#drawer').classList.add('open'); $('#drawer-scrim').hidden = false; }
+
+// クラウドの使用量（無料枠 1GB に対して）。ログインしていなければ出さない
+const FREE_BYTES = 1024 ** 3;
+function renderUsage() {
+  const u = window.Sync && window.Sync.usage ? window.Sync.usage() : null;
+  $('#usage').hidden = !u;
+  if (!u) return;
+  const mb = n => (n < 1e6 ? (n / 1e6).toFixed(2) : n < 1e8 ? (n / 1e6).toFixed(1) : Math.round(n / 1e6)) + ' MB';
+  const ratio = u.total / FREE_BYTES, fill = $('#usage-fill');
+  $('#usage-total').textContent = `約 ${mb(u.total)} / 1 GB`;
+  fill.style.width = Math.min(100, Math.max(ratio * 100, u.total ? 0.5 : 0)) + '%';
+  fill.className = ratio > 0.9 ? 'full' : ratio > 0.7 ? 'warn' : '';
+  $('#usage-detail').textContent = `ノート ${mb(u.boards)}・画像 ${mb(u.assets)}（${(ratio * 100).toFixed(ratio < 0.1 ? 2 : 1)}%）`;
+}
 function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-scrim').hidden = true; }
 $('#btn-drawer').onclick = openDrawer;
 $('#drawer-scrim').onclick = closeDrawer;
@@ -2037,7 +2051,8 @@ window.App = {
     toast(`「${src.name}」が両方の端末で編集されていたので、コピーを残しました`);
   },
   setSyncStatus(status, msg = '') { syncState.status = status; syncState.msg = msg; renderSync(); },
-  setSyncUser(u) { syncState.user = u; renderSync(); },
+  setSyncUser(u) { syncState.user = u; renderSync(); renderUsage(); },
+  usageChanged() { if ($('#drawer').classList.contains('open')) renderUsage(); },
   syncReady() {},
 };
 
@@ -2073,7 +2088,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=20' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=21' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
