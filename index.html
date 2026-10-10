@@ -18,7 +18,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=16">
+<link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -120,17 +120,21 @@
 <aside id="drawer" aria-hidden="true">
   <div class="drawer-head">
     <h2>ボード</h2>
-    <button class="ibtn" id="btn-new" data-icon="plus" title="新しいボード"></button>
+    <div class="drawer-actions">
+      <button class="ibtn" id="btn-new-folder" data-icon="folder-plus" title="新しいフォルダ"></button>
+      <button class="ibtn" id="btn-new" data-icon="plus" title="新しいボード"></button>
+    </div>
   </div>
   <ul id="board-list"></ul>
 </aside>
+<div id="pop-move" class="pop chip" hidden></div>
 
 <input type="file" id="file-import" accept="application/json,.json" hidden>
 <div id="toast" hidden></div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=16"></script>
-<script src="ruler.js?v=16"></script>
-<script src="app.js?v=16"></script>
+<script src="firebase-config.js?v=17"></script>
+<script src="ruler.js?v=17"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

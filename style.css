@@ -241,8 +241,31 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #board-list .meta { flex: 1; min-width: 0; padding: 6px 0; }
 #board-list .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #board-list .date { font-size: 12px; color: var(--muted); }
-#board-list .ibtn { width: 32px; height: 32px; color: var(--muted); }
+#board-list .ibtn { width: 32px; height: 32px; color: var(--muted); flex: none; }
 #board-list .ibtn svg { width: 17px; height: 17px; }
+/* フォルダ */
+.drawer-actions { display: flex; gap: 2px; }
+#board-list li.folder { padding-left: 4px; gap: 2px; }
+#board-list li.folder .name { font-weight: 600; }
+#board-list li.folder .meta { padding: 9px 0; }
+#board-list .chev, #board-list .ficon { display: grid; place-items: center; color: var(--muted); flex: none; }
+#board-list .chev svg { width: 16px; height: 16px; transition: transform .15s; }
+#board-list li.folder.open .chev svg { transform: rotate(90deg); }
+#board-list .ficon svg { width: 18px; height: 18px; }
+#board-list li.folder.has-current .ficon { color: var(--accent); }
+#board-list .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 2px; }
+#board-list li.board.in { margin-left: 22px; }
+#board-list li.section { cursor: default; padding: 12px 10px 4px; font-size: 12px; color: var(--muted); }
+#board-list li.section:hover { background: none; }
+/* マウスで操作する端末では、ボタンはマウスを乗せたときだけ出して名前を読みやすく（タッチ端末では常に出す） */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  #board-list li .ibtn { opacity: 0; }
+  #board-list li:hover .ibtn, #board-list li .ibtn:focus-visible { opacity: 1; }
+}
+#pop-move { z-index: 40; max-height: 60vh; overflow-y: auto; }
+#pop-move .mitem { display: flex; align-items: center; gap: 8px; }
+#pop-move .mitem svg { width: 17px; height: 17px; color: var(--muted); }
+#pop-move .mitem.active { background: var(--accent-soft); color: var(--accent); }
 
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(80px + var(--safe-b)); z-index: 40;

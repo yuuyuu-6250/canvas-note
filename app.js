@@ -1176,6 +1176,11 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  chevron: '<path d="m9 6 6 6-6 6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  'folder-plus': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 10.5v5M9.5 13h5"/>',
+  'folder-move': '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 13h6M12.5 10.5 15 13l-2.5 2.5"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
   cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
@@ -1278,7 +1283,7 @@ function openPop(pop, btn) {
 }
 function closePops() { $$('.pop').forEach(p => p.hidden = true); }
 document.addEventListener('pointerdown', e => {
-  if (!e.target.closest('.pop') && !e.target.closest('#btn-bg') && !e.target.closest('#btn-more') && !e.target.closest('#sync')) closePops();
+  if (!e.target.closest('.pop') && !e.target.closest('#btn-bg') && !e.target.closest('#btn-more') && !e.target.closest('#sync') && !e.target.closest('.pop-trigger')) closePops();
 }, true);
 
 function syncSeg(el, value) { el.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.v === String(value))); }
@@ -1433,6 +1438,7 @@ function newBoardData(name) {
 async function ensureBoard() {
   if (visibleBoards().length) return;
   const b = newBoardData(S.boards.length ? '新しいボード' : 'はじめてのボード');
+  b.auto = true; // 自動で作った空のボード（クラウドにボードがあれば同期のときに片付ける）
   await Store.put(b);
   S.boards.push(b);
 }
@@ -1476,20 +1482,97 @@ function openBoard(b) {
   render();
 }
 
+/* ---------- フォルダ ----------
+   ボードの folder（フォルダ名）で分ける。フォルダ名はボードと一緒に同期される。
+   まだ空のフォルダは、この端末の localStorage にだけ覚えておく */
+const folderNames = () => {
+  const set = new Set(LS.get('folders', []));
+  for (const b of visibleBoards()) if (b.folder) set.add(b.folder);
+  return [...set].sort((a, b) => a.localeCompare(b, 'ja'));
+};
+const folderOpen = name => LS.get('folderOpen', {})[name] !== false;
+function setFolderOpen(name, open) { const o = LS.get('folderOpen', {}); o[name] = open; LS.set('folderOpen', o); }
+function askFolderName(title, current = '') {
+  const name = (prompt(title, current) || '').trim();
+  if (!name) return null;
+  if (name !== current && folderNames().includes(name)) { toast(`「${name}」はもうあります`); return null; }
+  return name;
+}
+function addFolder() {
+  const name = askFolderName('新しいフォルダの名前');
+  if (!name) return null;
+  LS.set('folders', [...LS.get('folders', []), name]);
+  setFolderOpen(name, true);
+  renderBoardList();
+  return name;
+}
+function renameFolder(old) {
+  const name = askFolderName('フォルダの名前', old);
+  if (!name || name === old) return;
+  LS.set('folders', LS.get('folders', []).map(f => (f === old ? name : f)));
+  setFolderOpen(name, folderOpen(old));
+  for (const b of visibleBoards()) if (b.folder === old) updateBoardMeta(b, { folder: name });
+  renderBoardList();
+}
+function deleteFolder(name) {
+  const n = visibleBoards().filter(b => b.folder === name).length;
+  if (!confirm(n ? `フォルダ「${name}」を削除します。中の ${n} 個のボードは消さずに「フォルダなし」に移します。` : `フォルダ「${name}」を削除します。`)) return;
+  LS.set('folders', LS.get('folders', []).filter(f => f !== name));
+  for (const b of visibleBoards()) if (b.folder === name) updateBoardMeta(b, { folder: null });
+  renderBoardList();
+}
+// ボードの名前・フォルダなどを変えて保存・同期する
+function updateBoardMeta(b, patch) {
+  Object.assign(b, patch, { updatedAt: Date.now() });
+  if (b === S.board) saveNow(); else Store.put(b);
+  window.Sync?.changed();
+}
+
+// 移動先を選ぶメニュー
+let moveTarget = null;
+function openMoveMenu(b, btn) {
+  moveTarget = b;
+  const pop = $('#pop-move'), cur = b.folder || null;
+  const item = (label, v, icon) => `<button class="mitem ${v === cur ? 'active' : ''}" data-folder="${v === null ? '' : escapeHTML(v)}">${icon ? `<span data-icon="${icon}"></span>` : ''}<span></span></button>`;
+  pop.innerHTML = `<div class="pop-label">「${escapeHTML(b.name)}」の移動先</div>`
+    + item('フォルダなし', null, 'inbox')
+    + folderNames().map(f => item(f, f, 'folder')).join('')
+    + `<hr><button class="mitem" data-new="1"><span data-icon="folder-plus"></span><span>新しいフォルダ…</span></button>`;
+  // ラベルは textContent で入れる（名前に記号があっても安全）
+  const labels = ['フォルダなし', ...folderNames()];
+  pop.querySelectorAll('[data-folder]').forEach((el, i) => { el.lastElementChild.textContent = labels[i]; });
+  fillIcons(pop);
+  pop.onclick = e => {
+    const el = e.target.closest('button'); if (!el) return;
+    let folder;
+    if (el.dataset.new) { folder = addFolder(); if (!folder) return; }
+    else folder = el.dataset.folder || null;
+    closePops();
+    if ((moveTarget.folder || null) !== folder) { updateBoardMeta(moveTarget, { folder }); if (folder) setFolderOpen(folder, true); }
+    renderBoardList();
+  };
+  openPop(pop, btn);
+}
+const escapeHTML = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 function renderBoardList() {
   const ul = $('#board-list');
   const fmt = t => new Date(t).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   ul.innerHTML = '';
-  for (const b of visibleBoards().sort((a, b) => b.updatedAt - a.updatedAt)) {
+  const boards = visibleBoards().sort((a, b) => b.updatedAt - a.updatedAt);
+  const button = (icon, title) => `<button class="ibtn" data-icon="${icon}" title="${title}"></button>`;
+
+  const boardRow = (b, inFolder) => {
     const li = document.createElement('li');
-    if (b === S.board) li.className = 'current';
-    li.innerHTML = `<div class="meta"><div class="name"></div><div class="date">${fmt(b.updatedAt)}</div></div>
-      <button class="ibtn" data-icon="edit" title="名前を変更"></button>
-      <button class="ibtn" data-icon="trash" title="削除"></button>`;
+    li.className = 'board' + (inFolder ? ' in' : '') + (b === S.board ? ' current' : '');
+    li.innerHTML = `<div class="meta"><div class="name"></div><div class="date">${fmt(b.updatedAt)}</div></div>`
+      + button('folder-move', 'フォルダへ移動') + button('edit', '名前を変更') + button('trash', '削除');
     li.querySelector('.name').textContent = b.name;
     fillIcons(li);
-    const [ren, del] = li.querySelectorAll('button');
+    const [mv, ren, del] = li.querySelectorAll('button');
+    mv.classList.add('pop-trigger');
     li.onclick = () => { openBoard(b); closeDrawer(); };
+    mv.onclick = e => { e.stopPropagation(); openMoveMenu(b, mv); };
     ren.onclick = e => {
       e.stopPropagation();
       const name = prompt('ボード名', b.name);
@@ -1499,8 +1582,34 @@ function renderBoardList() {
       e.stopPropagation();
       if (confirm(`「${b.name}」を削除します。元に戻せません。`)) deleteBoard(b);
     };
+    return li;
+  };
+
+  for (const f of folderNames()) {
+    const inside = boards.filter(b => b.folder === f), open = folderOpen(f);
+    const li = document.createElement('li');
+    li.className = 'folder' + (open ? ' open' : '') + (inside.includes(S.board) ? ' has-current' : '');
+    li.innerHTML = `<span class="chev" data-icon="chevron"></span><span class="ficon" data-icon="folder"></span>
+      <div class="meta"><div class="name"></div></div><span class="count">${inside.length}</span>`
+      + button('plus', 'このフォルダに新しいボード') + button('edit', 'フォルダの名前を変更') + button('trash', 'フォルダを削除');
+    li.querySelector('.name').textContent = f;
+    fillIcons(li);
+    const [add, ren, del] = li.querySelectorAll('button');
+    li.onclick = () => { setFolderOpen(f, !open); renderBoardList(); };
+    add.onclick = e => { e.stopPropagation(); createBoard(f); };
+    ren.onclick = e => { e.stopPropagation(); renameFolder(f); };
+    del.onclick = e => { e.stopPropagation(); deleteFolder(f); };
     ul.appendChild(li);
+    if (open) for (const b of inside) ul.appendChild(boardRow(b, true));
   }
+  const loose = boards.filter(b => !b.folder);
+  if (loose.length && folderNames().length) {
+    const h = document.createElement('li');
+    h.className = 'section';
+    h.textContent = 'フォルダなし';
+    ul.appendChild(h);
+  }
+  for (const b of loose) ul.appendChild(boardRow(b, false));
 }
 async function deleteBoard(b) {
   if (b.syncedAt) {
@@ -1515,11 +1624,8 @@ async function deleteBoard(b) {
   if (b === S.board) { S.board = null; openBoard(newest()); } else renderBoardList();
 }
 function renameBoard(b, name) {
-  b.name = name;
-  b.updatedAt = Date.now();
-  if (b === S.board) { $('#title').value = name; document.title = name + ' – Canvas Note'; saveNow(); }
-  else Store.put(b);
-  window.Sync?.changed();
+  updateBoardMeta(b, { name });
+  if (b === S.board) { $('#title').value = name; document.title = name + ' – Canvas Note'; }
   renderBoardList();
 }
 
@@ -1529,14 +1635,17 @@ $('#title').addEventListener('change', e => {
 });
 $('#title').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
 
-$('#btn-new').onclick = async () => {
+async function createBoard(folder) {
   saveNow();
   const b = newBoardData('ボード ' + (visibleBoards().length + 1));
+  if (folder) { b.folder = folder; setFolderOpen(folder, true); }
   await Store.put(b);
   S.boards.push(b);
   openBoard(b);
   closeDrawer();
-};
+}
+$('#btn-new').onclick = () => createBoard(null);
+$('#btn-new-folder').onclick = () => addFolder();
 
 function openDrawer() { renderBoardList(); $('#drawer').classList.add('open'); $('#drawer-scrim').hidden = false; }
 function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawer-scrim').hidden = true; }
@@ -1605,7 +1714,7 @@ window.App = {
     const t = Date.now();
     const b = {
       id: uid(), name: src.name + '（競合コピー）', createdAt: t - 1, updatedAt: t,
-      bg: src.bg, view: { x: 0, y: 0, s: 1 }, strokes: (src === S.board ? S.strokes : src.strokes || []).slice(),
+      bg: src.bg, folder: src.folder || null, view: { x: 0, y: 0, s: 1 }, strokes: (src === S.board ? S.strokes : src.strokes || []).slice(),
     };
     await Store.put(b);
     S.boards.push(b);
@@ -1648,7 +1757,7 @@ loadBoards()
   .then(() => {
     if (!window.FIREBASE_CONFIG) return;
     App.setSyncStatus('syncing');
-    return import('./sync.js?v=16').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
+    return import('./sync.js?v=17').catch(err => App.setSyncStatus('error', '同期を開始できませんでした（' + err.message + '）'));
   })
   .catch(err => toast('データを開けませんでした: ' + err.message));
 

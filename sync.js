@@ -49,8 +49,9 @@ const boardsCol = () => F.collection(db, 'users', user.uid, 'boards');
 const boardDoc = id => F.doc(db, 'users', user.uid, 'boards', id);
 const chunksCol = id => F.collection(db, 'users', user.uid, 'boards', id, 'chunks');
 const isDirty = b => b.updatedAt !== b.syncedAt;
-// 新規の空ボード（何も描いていない）は同期しない
-const isPristine = b => !b.syncedAt && !b.deleted && !App.strokesOf(b).length && b.createdAt === b.updatedAt;
+// 自動で作った空のボード（一度も触っていない）は同期しない。クラウドにボードがあれば片付ける。
+// 自分で作ったボードは、空でも同期する（消さない）
+const isPristine = b => b.auto && !b.syncedAt && !b.deleted && !App.strokesOf(b).length && b.createdAt === b.updatedAt;
 
 /* ---------- チャンク ---------- */
 // 線1本の JSON（線は書き換えずに作り直す決まりなので、作った文字列を覚えておける）
@@ -99,7 +100,7 @@ async function push(b) {
 
   const meta = {
     name: b.name || '無題', createdAt: b.createdAt || updatedAt, updatedAt, bg: b.bg || null,
-    deleted: !!b.deleted, revs,
+    deleted: !!b.deleted, folder: b.folder || null, revs,
   };
   const batch = F.writeBatch(db);
   batch.set(userDoc(), { boards: { [b.id]: meta } }, { merge: true });
@@ -171,12 +172,12 @@ async function applyRemote(meta, local, force = false) {
   if (!strokes) return;
   await App.applyRemote({
     id: meta.id, name: meta.name, createdAt: meta.createdAt, updatedAt: meta.updatedAt,
-    syncedAt: meta.updatedAt, bg: meta.bg || { type: 'grid', size: 32 }, strokes,
+    syncedAt: meta.updatedAt, bg: meta.bg || { type: 'grid', size: 32 }, folder: meta.folder || null, strokes,
   }, force);
 }
 async function remoteAsBoard(meta) {
   const strokes = await pull(meta) || [];
-  return { id: meta.id, name: meta.name, createdAt: meta.createdAt, updatedAt: meta.updatedAt, bg: meta.bg, strokes };
+  return { id: meta.id, name: meta.name, createdAt: meta.createdAt, updatedAt: meta.updatedAt, bg: meta.bg, folder: meta.folder || null, strokes };
 }
 
 /* ---------- 突き合わせ ---------- */
