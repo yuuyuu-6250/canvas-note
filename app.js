@@ -150,6 +150,7 @@ const S = {
   finger: LS.get('finger', 'auto'),
   theme: LS.get('theme', 'auto'),   // auto | light | dark
   smooth: LS.get('smooth', 50),     // 手ぶれ補正の強さ（0〜100）
+  penMin: LS.get('penMin', 0.02),   // ペンが触れたとみなす筆圧（0 なら判定しない）
 };
 
 /* ストローク = { id, t:'pen'|'hl', c:色, w:太さ, pr:筆圧あり, p:[x,y,筆圧, ...] }
@@ -1034,6 +1035,23 @@ function onDown(e) {
   }
   if (act) return;
 
+  // ペンが近づいただけ（筆圧がほぼ 0）では始めない。筆圧が出た時点から始める
+  if (e.pointerType === 'pen' && !penTouching(e)) { act = { type: 'penwait', pid: e.pointerId }; return; }
+  startAction(e);
+}
+
+/* ---------- ペンが本当に触れているか ----------
+   ペンによっては、触れる少し手前から「押した」と知らせてくる（そのときの筆圧は 0 かごく小さい）。
+   筆圧が S.penMin 以上なら触れているとみなす。書いている途中は半分まで下がるまで続ける（途切れにくく） */
+const penTouching = (e, keep = false) => S.penMin <= 0 || e.pressure >= (keep ? S.penMin / 2 : S.penMin);
+// 書いている途中でペンが浮いた → そこで終えて、また触れるのを待つ
+function liftPen(e) {
+  const a = act;
+  act = { type: 'penwait', pid: e.pointerId };
+  endAction(a, e);
+}
+
+function startAction(e) {
   const x = e.clientX, y = e.clientY;
   if (e.button === 1 || spaceDown || S.tool === 'hand' || (e.pointerType === 'touch' && fingerPans())) {
     act = { type: 'pan', pid: e.pointerId, lx: x, ly: y };
@@ -1192,8 +1210,31 @@ function onMove(e) {
   let evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
   if (!evs.length) evs = [e];
 
+  // ペン：触れるまで待っていた → 筆圧が出たら始める
+  if (act.type === 'penwait') {
+    const ev = evs.find(v => penTouching(v));
+    if (ev) { act = null; startAction(ev); }
+    return;
+  }
+  // ペン：消す・囲む・動かす途中で浮いた（筆圧が 0 近くが続いた）→ そこで終える
+  if (e.pointerType === 'pen' && act.type !== 'draw' && /^(erase|lasso|move|scale)$/.test(act.type)) {
+    if (!penTouching(e, true)) { if ((act.low = (act.low || 0) + 1) >= 3) liftPen(e); return; }
+    act.low = 0;
+  }
+
   switch (act.type) {
-    case 'draw': for (const ev of evs) addPoint(ev); renderOverSoon(); break;
+    case 'draw':
+      for (const ev of evs) {
+        // ペンが浮いた点は使わない。3回続いたら、そこで線を終える
+        if (e.pointerType === 'pen' && !penTouching(ev, true)) {
+          if ((act.low = (act.low || 0) + 1) >= 3) { liftPen(e); renderOverSoon(); return; }
+          continue;
+        }
+        act.low = 0;
+        addPoint(ev);
+      }
+      renderOverSoon();
+      break;
     case 'erase':
       for (const ev of evs) eraseTo(ev.clientX, ev.clientY);
       hover = { x: e.clientX, y: e.clientY };
@@ -1244,6 +1285,11 @@ function onUp(e) {
 
   const a = act;
   act = null;
+  endAction(a, e);
+}
+
+// 操作を終える（ペンを離したとき・ペンが浮いたとき）
+function endAction(a, e) {
   switch (a.type) {
     case 'draw':
       S.cur = null;
@@ -1520,6 +1566,11 @@ $('#finger').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   S.finger = b.dataset.v; LS.set('finger', S.finger); syncSeg($('#finger'), S.finger);
 });
+// ペンが触れたとみなす強さ（%）
+function syncPenMin() { $('#penmin').value = Math.round(S.penMin * 100); $('#penmin-val').textContent = Math.round(S.penMin * 100) + '%'; }
+$('#penmin').addEventListener('input', e => { S.penMin = +e.target.value / 100; syncPenMin(); });
+$('#penmin').addEventListener('change', () => LS.set('penMin', S.penMin));
+syncPenMin();
 $('#theme').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   S.theme = b.dataset.v; LS.set('theme', S.theme); applyTheme();
@@ -2232,7 +2283,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=23' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=24' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
