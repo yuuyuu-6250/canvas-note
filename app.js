@@ -1794,43 +1794,79 @@ function openBoard(b) {
   render();
 }
 
-/* ---------- フォルダ ----------
-   ボードの folder（フォルダ名）で分ける。フォルダ名はボードと一緒に同期される。
+/* ---------- フォルダ（入れ子にできる） ----------
+   ボードの folder に「数学/微分」のような道筋を持つ（/ で区切る）。道筋はボードと一緒に同期される。
    まだ空のフォルダは、この端末の localStorage にだけ覚えておく */
-const folderNames = () => {
-  const set = new Set(LS.get('folders', []));
-  for (const b of visibleBoards()) if (b.folder) set.add(b.folder);
-  return [...set].sort((a, b) => a.localeCompare(b, 'ja'));
-};
+const SEP = '/';
+const parentOf = p => (p.includes(SEP) ? p.slice(0, p.lastIndexOf(SEP)) : null);
+const leafOf = p => p.slice(p.lastIndexOf(SEP) + 1);
+const depthOf = p => p.split(SEP).length - 1;
+const inFolder = (f, p) => !!f && (f === p || f.startsWith(p + SEP)); // f が p の中（p 自身も含む）
+// 木の順（親のすぐ後に子）に並べる
+function byPath(a, b) {
+  const A = a.split(SEP), B = b.split(SEP);
+  for (let i = 0; i < Math.min(A.length, B.length); i++) { const c = A[i].localeCompare(B[i], 'ja'); if (c) return c; }
+  return A.length - B.length;
+}
+function folderNames() {
+  const set = new Set();
+  const add = p => { while (p) { set.add(p); p = parentOf(p); } }; // 親のフォルダも
+  for (const f of LS.get('folders', [])) add(f);
+  for (const b of visibleBoards()) if (b.folder) add(b.folder);
+  return [...set].sort(byPath);
+}
+const childFolders = parent => folderNames().filter(p => parentOf(p) === parent);
 const folderOpen = name => LS.get('folderOpen', {})[name] !== false;
 function setFolderOpen(name, open) { const o = LS.get('folderOpen', {}); o[name] = open; LS.set('folderOpen', o); }
-function askFolderName(title, current = '') {
-  const name = (prompt(title, current) || '').trim();
+// 名前を聞いて、parent の中の道筋にする（「/」は区切りに使うので全角に）
+function askFolderName(title, parent, current = '') {
+  const name = (prompt(title, current) || '').trim().replace(/\//g, '／');
   if (!name) return null;
-  if (name !== current && folderNames().includes(name)) { toast(`「${name}」はもうあります`); return null; }
-  return name;
+  const path = parent ? parent + SEP + name : name;
+  if (name !== current && folderNames().includes(path)) { toast(`「${name}」はもうあります`); return null; }
+  return path;
 }
-function addFolder() {
-  const name = askFolderName('新しいフォルダの名前');
-  if (!name) return null;
-  LS.set('folders', [...LS.get('folders', []), name]);
-  setFolderOpen(name, true);
+function addFolder(parent = null) {
+  const path = askFolderName(parent ? `「${leafOf(parent)}」の中に作るフォルダの名前` : '新しいフォルダの名前', parent);
+  if (!path) return null;
+  LS.set('folders', [...LS.get('folders', []), path]);
+  setFolderOpen(path, true);
+  if (parent) setFolderOpen(parent, true);
   renderBoardList();
-  return name;
+  return path;
 }
-function renameFolder(old) {
-  const name = askFolderName('フォルダの名前', old);
-  if (!name || name === old) return;
-  LS.set('folders', LS.get('folders', []).map(f => (f === old ? name : f)));
-  setFolderOpen(name, folderOpen(old));
-  for (const b of visibleBoards()) if (b.folder === old) updateBoardMeta(b, { folder: name });
+// フォルダの道筋を付け替える（中のフォルダ・ボードも一緒に）。map(道筋) → 新しい道筋
+function repath(isTarget, map) {
+  LS.set('folders', [...new Set(LS.get('folders', []).map(p => (isTarget(p) ? map(p) : p)).filter(Boolean))]);
+  const open = LS.get('folderOpen', {}), o2 = {};
+  for (const k in open) { const nk = isTarget(k) ? map(k) : k; if (nk) o2[nk] = open[k]; }
+  LS.set('folderOpen', o2);
+  for (const b of visibleBoards()) if (b.folder && isTarget(b.folder)) updateBoardMeta(b, { folder: map(b.folder) || null });
+}
+function renameFolder(path) {
+  const neu = askFolderName('フォルダの名前', parentOf(path), leafOf(path));
+  if (!neu || neu === path) return;
+  repath(p => inFolder(p, path), p => neu + p.slice(path.length));
   renderBoardList();
 }
-function deleteFolder(name) {
-  const n = visibleBoards().filter(b => b.folder === name).length;
-  if (!confirm(n ? `フォルダ「${name}」を削除します。中の ${n} 個のボードは消さずに「フォルダなし」に移します。` : `フォルダ「${name}」を削除します。`)) return;
-  LS.set('folders', LS.get('folders', []).filter(f => f !== name));
-  for (const b of visibleBoards()) if (b.folder === name) updateBoardMeta(b, { folder: null });
+function moveFolder(path, dest) { // dest：移動先のフォルダ（null ならいちばん上）
+  if (dest && inFolder(dest, path)) { toast('フォルダを自分の中には移せません'); return; }
+  const neu = (dest ? dest + SEP : '') + leafOf(path);
+  if (neu === path) return;
+  if (folderNames().includes(neu)) { toast(`移動先に「${leafOf(path)}」がもうあります`); return; }
+  repath(p => inFolder(p, path), p => neu + p.slice(path.length));
+  if (dest) setFolderOpen(dest, true);
+  renderBoardList();
+}
+// 削除：中のボードとサブフォルダは消さず、1つ上の階層へ移す
+function deleteFolder(path) {
+  const parent = parentOf(path);
+  const n = visibleBoards().filter(b => inFolder(b.folder, path)).length;
+  const subs = folderNames().filter(p => p.startsWith(path + SEP) && parentOf(p) === path).length;
+  const dest = parent ? `「${leafOf(parent)}」` : '「フォルダなし」';
+  const inside = [n ? `${n} 個のボード` : '', subs ? `${subs} 個のフォルダ` : ''].filter(Boolean).join('と');
+  if (!confirm(inside ? `フォルダ「${leafOf(path)}」を削除します。中の${inside}は消さずに${dest}に移します。` : `フォルダ「${leafOf(path)}」を削除します。`)) return;
+  repath(p => inFolder(p, path), p => (p === path ? parent : (parent ? parent + SEP : '') + p.slice(path.length + 1)));
   renderBoardList();
 }
 // ボードの名前・フォルダなどを変えて保存・同期する
@@ -1840,28 +1876,53 @@ function updateBoardMeta(b, patch) {
   window.Sync?.changed();
 }
 
-// 移動先を選ぶメニュー
-let moveTarget = null;
-function openMoveMenu(b, btn) {
-  moveTarget = b;
-  const pop = $('#pop-move'), cur = b.folder || null;
-  const item = (label, v, icon) => `<button class="mitem ${v === cur ? 'active' : ''}" data-folder="${v === null ? '' : escapeHTML(v)}">${icon ? `<span data-icon="${icon}"></span>` : ''}<span></span></button>`;
-  pop.innerHTML = `<div class="pop-label">「${escapeHTML(b.name)}」の移動先</div>`
-    + item('フォルダなし', null, 'inbox')
-    + folderNames().map(f => item(f, f, 'folder')).join('')
+/* ---------- フォルダを選ぶメニュー（ボード・フォルダの移動先） ---------- */
+// current：今いるフォルダ（印を付ける）、exclude：選べないフォルダ（自分自身とその中）
+function openFolderPicker(btn, title, { current, exclude, topLabel, onPick }) {
+  const pop = $('#pop-move');
+  const list = [null, ...folderNames().filter(p => !(exclude && inFolder(p, exclude)))];
+  pop.innerHTML = `<div class="pop-label"></div>`
+    + list.map((p, i) => `<button class="mitem ${p === (current || null) ? 'active' : ''}" data-i="${i}" style="padding-left:${10 + (p ? depthOf(p) * 16 : 0)}px"><span data-icon="${p ? 'folder' : 'inbox'}"></span><span></span></button>`).join('')
     + `<hr><button class="mitem" data-new="1"><span data-icon="folder-plus"></span><span>新しいフォルダ…</span></button>`;
-  // ラベルは textContent で入れる（名前に記号があっても安全）
-  const labels = ['フォルダなし', ...folderNames()];
-  pop.querySelectorAll('[data-folder]').forEach((el, i) => { el.lastElementChild.textContent = labels[i]; });
+  pop.querySelector('.pop-label').textContent = title;
+  pop.querySelectorAll('[data-i]').forEach(el => { const p = list[+el.dataset.i]; el.lastElementChild.textContent = p ? leafOf(p) : topLabel; });
   fillIcons(pop);
   pop.onclick = e => {
     const el = e.target.closest('button'); if (!el) return;
-    let folder;
-    if (el.dataset.new) { folder = addFolder(); if (!folder) return; }
-    else folder = el.dataset.folder || null;
+    let dest;
+    if (el.dataset.new) { dest = addFolder(null); if (!dest) return; }
+    else dest = list[+el.dataset.i];
     closePops();
-    if ((moveTarget.folder || null) !== folder) { updateBoardMeta(moveTarget, { folder }); if (folder) setFolderOpen(folder, true); }
+    onPick(dest);
     renderBoardList();
+  };
+  openPop(pop, btn);
+}
+function openMoveMenu(b, btn) {
+  openFolderPicker(btn, `「${b.name}」の移動先`, {
+    current: b.folder || null, topLabel: 'フォルダなし',
+    onPick: folder => { if ((b.folder || null) !== folder) { updateBoardMeta(b, { folder }); if (folder) setFolderOpen(folder, true); } },
+  });
+}
+// フォルダの「︙」メニュー
+function openFolderMenu(path, btn) {
+  const pop = $('#pop-folder');
+  const items = [
+    ['plus', '新しいボード', () => createBoard(path)],
+    ['folder-plus', 'サブフォルダを作る', () => addFolder(path)],
+    ['edit', '名前を変更', () => renameFolder(path)],
+    ['folder-move', '別のフォルダへ移動', () => openFolderPicker(btn, `「${leafOf(path)}」の移動先`, {
+      current: parentOf(path), exclude: path, topLabel: 'いちばん上', onPick: dest => moveFolder(path, dest),
+    })],
+    ['trash', '削除', () => deleteFolder(path)],
+  ];
+  pop.innerHTML = `<div class="pop-label"></div>` + items.map(([ic, label], i) => `<button class="mitem${ic === 'trash' ? ' danger' : ''}" data-i="${i}"><span data-icon="${ic}"></span><span>${label}</span></button>`).join('');
+  pop.querySelector('.pop-label').textContent = leafOf(path);
+  fillIcons(pop);
+  pop.onclick = e => {
+    const el = e.target.closest('[data-i]'); if (!el) return;
+    closePops();
+    items[+el.dataset.i][2]();
   };
   openPop(pop, btn);
 }
@@ -1873,10 +1934,12 @@ function renderBoardList() {
   ul.innerHTML = '';
   const boards = visibleBoards().sort((a, b) => b.updatedAt - a.updatedAt);
   const button = (icon, title) => `<button class="ibtn" data-icon="${icon}" title="${title}"></button>`;
+  const INDENT = 16;
 
-  const boardRow = (b, inFolder) => {
+  const boardRow = (b, depth) => {
     const li = document.createElement('li');
-    li.className = 'board' + (inFolder ? ' in' : '') + (b === S.board ? ' current' : '');
+    li.className = 'board' + (b === S.board ? ' current' : '');
+    if (depth) li.style.marginLeft = depth * INDENT + 6 + 'px';
     li.innerHTML = `<div class="meta"><div class="name"></div><div class="date">${fmt(b.updatedAt)}</div></div>`
       + button('folder-move', 'フォルダへ移動') + button('edit', '名前を変更') + button('trash', '削除');
     li.querySelector('.name').textContent = b.name;
@@ -1897,31 +1960,38 @@ function renderBoardList() {
     return li;
   };
 
-  for (const f of folderNames()) {
-    const inside = boards.filter(b => b.folder === f), open = folderOpen(f);
+  const folderRow = path => {
+    const depth = depthOf(path), open = folderOpen(path);
+    const all = boards.filter(b => inFolder(b.folder, path)); // 中のフォルダの分も数える
     const li = document.createElement('li');
-    li.className = 'folder' + (open ? ' open' : '') + (inside.includes(S.board) ? ' has-current' : '');
+    li.className = 'folder' + (open ? ' open' : '') + (all.includes(S.board) ? ' has-current' : '');
+    if (depth) li.style.marginLeft = depth * INDENT + 'px';
     li.innerHTML = `<span class="chev" data-icon="chevron"></span><span class="ficon" data-icon="folder"></span>
-      <div class="meta"><div class="name"></div></div><span class="count">${inside.length}</span>`
-      + button('plus', 'このフォルダに新しいボード') + button('edit', 'フォルダの名前を変更') + button('trash', 'フォルダを削除');
-    li.querySelector('.name').textContent = f;
+      <div class="meta"><div class="name"></div></div><span class="count">${all.length}</span>`
+      + button('plus', 'このフォルダに新しいボード') + button('more', 'フォルダの操作');
+    li.querySelector('.name').textContent = leafOf(path);
     fillIcons(li);
-    const [add, ren, del] = li.querySelectorAll('button');
-    li.onclick = () => { setFolderOpen(f, !open); renderBoardList(); };
-    add.onclick = e => { e.stopPropagation(); createBoard(f); };
-    ren.onclick = e => { e.stopPropagation(); renameFolder(f); };
-    del.onclick = e => { e.stopPropagation(); deleteFolder(f); };
+    const [add, more] = li.querySelectorAll('button');
+    more.classList.add('pop-trigger');
+    li.onclick = () => { setFolderOpen(path, !open); renderBoardList(); };
+    add.onclick = e => { e.stopPropagation(); createBoard(path); };
+    more.onclick = e => { e.stopPropagation(); openFolderMenu(path, more); };
     ul.appendChild(li);
-    if (open) for (const b of inside) ul.appendChild(boardRow(b, true));
-  }
+    if (!open) return;
+    for (const sub of childFolders(path)) folderRow(sub);
+    for (const b of boards.filter(b => b.folder === path)) ul.appendChild(boardRow(b, depth + 1));
+  };
+
+  const tops = childFolders(null);
+  for (const f of tops) folderRow(f);
   const loose = boards.filter(b => !b.folder);
-  if (loose.length && folderNames().length) {
+  if (loose.length && tops.length) {
     const h = document.createElement('li');
     h.className = 'section';
     h.textContent = 'フォルダなし';
     ul.appendChild(h);
   }
-  for (const b of loose) ul.appendChild(boardRow(b, false));
+  for (const b of loose) ul.appendChild(boardRow(b, 0));
 }
 async function deleteBoard(b) {
   if (b.syncedAt) {
@@ -2088,7 +2158,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=21' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=22' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {

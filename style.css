@@ -272,10 +272,12 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   #board-list li .ibtn { opacity: 0; }
   #board-list li:hover .ibtn, #board-list li .ibtn:focus-visible { opacity: 1; }
 }
-#pop-move { z-index: 40; max-height: 60vh; overflow-y: auto; }
-#pop-move .mitem { display: flex; align-items: center; gap: 8px; }
-#pop-move .mitem svg { width: 17px; height: 17px; color: var(--muted); }
+#pop-move, #pop-folder { z-index: 40; max-height: 60vh; overflow-y: auto; }
+#pop-move .mitem, #pop-folder .mitem { display: flex; align-items: center; gap: 8px; }
+#pop-move .mitem svg, #pop-folder .mitem svg { width: 17px; height: 17px; color: var(--muted); flex: none; }
+#pop-move .mitem span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #pop-move .mitem.active { background: var(--accent-soft); color: var(--accent); }
+#pop-folder .mitem.danger, #pop-folder .mitem.danger svg { color: var(--danger); }
 
 #toast {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(80px + var(--safe-b)); z-index: 40;
