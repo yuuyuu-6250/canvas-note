@@ -297,6 +297,22 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .dlg-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .dlg-btns button { padding: 9px 14px; border-radius: 10px; background: var(--hover); font-weight: 600; }
 .dlg-btns button.primary { background: var(--accent); color: #fff; }
+/* ペンの調整 */
+#pencal { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; place-items: center; padding: 16px; }
+#pencal[hidden] { display: none; }
+#pencal-pad {
+  margin-top: 14px; height: 200px; border: 2px dashed var(--line); border-radius: 12px; padding: 16px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; touch-action: none; background: var(--surface);
+}
+#pencal-pad.measuring { border-color: var(--accent); }
+.pc-meter { position: relative; height: 14px; border-radius: 7px; background: var(--hover); overflow: hidden; }
+.pc-meter i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #94a3b8; }
+.pc-meter i.on { background: var(--accent); }
+.pc-meter b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--danger); }
+.pc-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); }
+#pencal-state { font-size: 13px; font-weight: 600; min-height: 20px; }
+.pc-now { margin-top: 10px; font-size: 13px; color: var(--muted); }
+.pc-now b { color: var(--text); }
 #sel-cloud { display: inline-flex; align-items: center; gap: 4px; }
 #sel-cloud[hidden] { display: none; }
 

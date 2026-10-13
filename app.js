@@ -1042,8 +1042,8 @@ function onDown(e) {
 
 /* ---------- ペンが本当に触れているか ----------
    ペンによっては、触れる少し手前から「押した」と知らせてくる（そのときの筆圧は 0 かごく小さい）。
-   筆圧が S.penMin 以上なら触れているとみなす。書いている途中は半分まで下がるまで続ける（途切れにくく） */
-const penTouching = (e, keep = false) => S.penMin <= 0 || e.pressure >= (keep ? S.penMin / 2 : S.penMin);
+   筆圧が S.penMin 以上なら触れているとみなす。書いている途中は 7 割まで下がるまで続ける（途切れにくく） */
+const penTouching = (e, keep = false) => S.penMin <= 0 || e.pressure >= (keep ? S.penMin * 0.7 : S.penMin);
 // 書いている途中でペンが浮いた → そこで終えて、また触れるのを待つ
 function liftPen(e) {
   const a = act;
@@ -1566,6 +1566,86 @@ $('#finger').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   S.finger = b.dataset.v; LS.set('finger', S.finger); syncSeg($('#finger'), S.finger);
 });
+/* ---------- ペンの調整 ----------
+   ① ペンを浮かせたまま動かしたときに出る筆圧（触れていないのに出る分）と、
+   ② 軽く書いたときの弱い筆圧 を測り、その間を「触れた」とみなす強さにする */
+const PC_MAX = 0.4; // メーターの右端（40%）
+let pcPhase = null; // null | 'hover' | 'write'
+const pcSamples = { hover: [], write: [] };
+const pct = v => Math.round(v * 1000) / 10 + '%';
+function pcMsg(s) { $('#pencal-msg').textContent = s; }
+function pcShowNow() {
+  $('#pencal-now').textContent = Math.round(S.penMin * 100) + '%';
+  $('#pencal-th').style.left = Math.min(100, S.penMin / PC_MAX * 100) + '%';
+}
+function openPenCal() {
+  pcPhase = null;
+  pcMsg('下の枠の上でペンを動かすと、今の筆圧がメーターに出ます（赤い線が「触れた」とみなす強さ）。\n「自動で合わせる」を押すと、あなたのペンに合わせて決めます。');
+  pcShowNow();
+  $('#pencal-fill').style.width = '0';
+  $('#pencal-state').textContent = '枠の上でペンを動かしてください';
+  $('#pencal').hidden = false;
+}
+function pcSample(e) {
+  if (e.pointerType !== 'pen') { $('#pencal-state').textContent = 'ペンで試してください'; return; }
+  for (const ev of (e.getCoalescedEvents && e.getCoalescedEvents().length ? e.getCoalescedEvents() : [e])) {
+    const down = (ev.buttons & 1) !== 0, pr = down ? ev.pressure : 0, on = down && pr >= S.penMin;
+    const fill = $('#pencal-fill');
+    fill.style.width = Math.min(100, pr / PC_MAX * 100) + '%';
+    fill.className = on ? 'on' : '';
+    $('#pencal-state').textContent = !down ? '浮いています（反応なし）'
+      : on ? `触れています（筆圧 ${pct(pr)}）` : `近づいています（筆圧 ${pct(pr)}・書かれません）`;
+    if (down && pcPhase) pcSamples[pcPhase].push(pr);
+  }
+}
+const pad = $('#pencal-pad');
+pad.addEventListener('pointerdown', e => { try { pad.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); pcSample(e); });
+pad.addEventListener('pointermove', e => { e.preventDefault(); pcSample(e); });
+pad.addEventListener('pointerup', e => pcSample(e));
+pad.addEventListener('pointerleave', () => { $('#pencal-fill').style.width = '0'; });
+$('#pencal-close').onclick = () => { pcPhase = null; $('#pencal').hidden = true; };
+
+const countdown = (sec, text) => new Promise(res => {
+  let left = sec;
+  const tick = () => { pcMsg(`${text}（あと ${left} 秒）`); if (left-- <= 0) { clearInterval(t); res(); } };
+  const t = setInterval(tick, 1000); tick();
+});
+$('#pencal-auto').onclick = async () => {
+  const btn = $('#pencal-auto');
+  btn.disabled = true;
+  pcSamples.hover = []; pcSamples.write = [];
+  pad.classList.add('measuring');
+  try {
+    pcPhase = 'hover';
+    await countdown(4, '① ペン先を画面に「付けずに」、枠の上でぎりぎりまで近づけて、ゆっくり動かしてください');
+    pcPhase = 'write';
+    await countdown(5, '② 次に、枠の中に「いつもより軽め」に線を何本か書いてください');
+    pcPhase = null;
+    const w = pcSamples.write.slice().sort((a, b) => a - b);
+    if (w.length < 10) { pcMsg('② で線が書かれませんでした。もう一度「自動で合わせる」を押してください。'); return; }
+    const hoverMax = pcSamples.hover.reduce((m, v) => Math.max(m, v), 0);
+    // 軽く書いたときの弱い方（下から 10%）。浮かせたときの値は混ざらないよう、それより上だけで見る
+    const above = w.filter(v => v > hoverMax);
+    const light = above.length >= 10 ? above[Math.floor(above.length * 0.1)] : 0;
+    let th, note;
+    if (light > hoverMax + 0.01) {
+      th = (hoverMax + light) / 2;
+      note = `浮かせたとき 最大 ${pct(hoverMax)}・軽く書いたとき ${pct(light)} くらい → 間の ${Math.round(clamp(th, 0.01, 0.3) * 100)}% にしました。`;
+    } else {
+      th = hoverMax + 0.01;
+      note = `浮かせたとき（最大 ${pct(hoverMax)}）と軽く書いたときの筆圧が近く、きれいに分けられませんでした。${Math.round(clamp(th, 0.01, 0.3) * 100)}% にしたので、軽い線が途切れるときは少し強めに書くか、メニューで下げてください。`;
+    }
+    S.penMin = Math.round(clamp(th, 0.01, 0.3) * 100) / 100;
+    LS.set('penMin', S.penMin);
+    syncPenMin(); pcShowNow();
+    pcMsg('合わせました。' + note + '\n枠の上で試して、よければ「閉じる」を押してください。');
+  } finally {
+    pcPhase = null;
+    btn.disabled = false;
+    pad.classList.remove('measuring');
+  }
+};
+
 // ペンが触れたとみなす強さ（%）
 function syncPenMin() { $('#penmin').value = Math.round(S.penMin * 100); $('#penmin-val').textContent = Math.round(S.penMin * 100) + '%'; }
 $('#penmin').addEventListener('input', e => { S.penMin = +e.target.value / 100; syncPenMin(); });
@@ -1594,7 +1674,7 @@ if (mqDark) mqDark.addEventListener('change', () => { if (S.theme === 'auto') ap
 $('#pop-more').addEventListener('click', e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   closePops();
-  ({ fit: fitAll, png: exportPNG, export: exportJSON, import: () => $('#file-import').click() })[b.dataset.act]();
+  ({ fit: fitAll, png: exportPNG, export: exportJSON, import: () => $('#file-import').click(), pencal: openPenCal })[b.dataset.act]();
 });
 
 $$('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
@@ -2283,7 +2363,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=24' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=25' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
