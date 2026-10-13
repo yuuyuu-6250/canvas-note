@@ -187,6 +187,8 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .wd.active i { background: var(--accent); }
 
 .wslider { width: 110px; flex: none; accent-color: var(--accent); }
+.smslider { width: 70px; flex: none; accent-color: var(--accent); }
+#smooth-val { min-width: 22px; }
 .wval { min-width: 30px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); flex: none; }
 @media (max-width: 520px) {
   /* スマホ：色・太さ・スライダーが1列に収まらないので折り返す */

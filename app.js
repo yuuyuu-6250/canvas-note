@@ -149,6 +149,7 @@ const S = {
   penSeen: false,
   finger: LS.get('finger', 'auto'),
   theme: LS.get('theme', 'auto'),   // auto | light | dark
+  smooth: LS.get('smooth', 50),     // 手ぶれ補正の強さ（0〜100）
 };
 
 /* ストローク = { id, t:'pen'|'hl', c:色, w:太さ, pr:筆圧あり, p:[x,y,筆圧, ...] }
@@ -1095,11 +1096,79 @@ function addPoint(e) {
     const r = curveSnapMove(x, y, act.curve);
     if (r) { act.curve = r.hint; x = r.x; y = r.y; }
   }
-  const w = toWorld(x, y);
+  let w = toWorld(x, y);
   const pr = st.pr ? (e.pressure || 0.5) : 0.5;
+  // 手ぶれ補正（書いている間）：ペン先を少し遅れて追いかけ、細かい揺れを吸収する（定規に沿うときはしない）
+  if (!act.snap && !act.curve && S.smooth > 0) {
+    act.raw = { x: w.x, y: w.y, pr };
+    const k = 0.7 * S.smooth / 100;
+    if (act.sm) { act.sm.x += (w.x - act.sm.x) * (1 - k); act.sm.y += (w.y - act.sm.y) * (1 - k); }
+    else act.sm = { x: w.x, y: w.y };
+    w = { x: act.sm.x, y: act.sm.y };
+  }
   const p = st.p, n = p.length;
   if (n && Math.hypot(w.x - p[n - 3], w.y - p[n - 2]) * S.view.s < 0.8) return;
   p.push(w.x, w.y, pr);
+}
+
+/* ---------- 手ぶれ補正（ペンを離したとき） ----------
+   線に沿った近くの点どうしをならす（ガウスの重み）。両端は動かさない。
+   向きがはっきり変わる角（「く」「L」の角など）は、そこで区切ってならすので丸くならない */
+function smoothStroke(p, sigma) {
+  const n = p.length / 3;
+  if (n < 5 || !(sigma > 0)) return p;
+  const s = new Float64Array(n); // 始点からの道のり
+  for (let i = 1; i < n; i++) s[i] = s[i - 1] + Math.hypot(p[i * 3] - p[i * 3 - 3], p[i * 3 + 1] - p[i * 3 - 2]);
+  if (s[n - 1] < sigma * 3) return p; // 点や、とても短い線はそのまま
+  // 角を探す：前後に 2σ 離れた点への向きが 75° 以上変わる所（続いていれば、いちばん鋭い所）
+  const ang = new Float64Array(n), reach = sigma * 2;
+  for (let i = 1, j = 0, k = 1; i < n - 1; i++) {
+    while (j < i && s[i] - s[j + 1] >= reach) j++;
+    if (k < i) k = i;
+    while (k < n - 1 && s[k] - s[i] < reach) k++;
+    const ax = p[i * 3] - p[j * 3], ay = p[i * 3 + 1] - p[j * 3 + 1], bx = p[k * 3] - p[i * 3], by = p[k * 3 + 1] - p[i * 3 + 1];
+    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+    if (la > 1e-9 && lb > 1e-9) ang[i] = Math.acos(clamp((ax * bx + ay * by) / (la * lb), -1, 1));
+  }
+  const cuts = [0], LIMIT = 75 * Math.PI / 180;
+  for (let i = 1; i < n - 1; i++) {
+    if (ang[i] < LIMIT) continue;
+    let m = i;
+    while (i + 1 < n - 1 && ang[i + 1] >= LIMIT) { i++; if (ang[i] > ang[m]) m = i; }
+    cuts.push(m);
+  }
+  cuts.push(n - 1);
+  const out = p.slice();
+  for (let c = 0; c + 1 < cuts.length; c++) {
+    const a = cuts[c], b = cuts[c + 1];
+    for (let i = a + 1, lo = a, hi = a; i < b; i++) {
+      // 区間の端に近いほど弱く（端の位置がずれないように）
+      const sg = Math.min(sigma, s[i] - s[a], s[b] - s[i]);
+      if (sg < 1e-6) continue;
+      const win = sg * 3; // 前後この道のりの中の点でならす（σ は場所で変わるので、窓は両方向に合わせ直す）
+      while (lo < i && s[i] - s[lo] > win) lo++;
+      while (lo > a && s[i] - s[lo - 1] <= win) lo--;
+      if (hi < i) hi = i;
+      while (hi < b && s[hi + 1] - s[i] <= win) hi++;
+      while (hi > i && s[hi] - s[i] > win) hi--;
+      let wx = 0, wy = 0, ws = 0;
+      for (let j = lo; j <= hi; j++) {
+        const d = (s[j] - s[i]) / sg, wt = Math.exp(-0.5 * d * d);
+        wx += p[j * 3] * wt; wy += p[j * 3 + 1] * wt; ws += wt;
+      }
+      out[i * 3] = wx / ws; out[i * 3 + 1] = wy / ws;
+    }
+  }
+  return out;
+}
+function finishSmooth(a) {
+  const p = a.st.p;
+  // 遅れて追いかけていた分、最後は実際のペン先まで線を伸ばす
+  if (a.raw) {
+    const n = p.length;
+    if (Math.hypot(a.raw.x - p[n - 3], a.raw.y - p[n - 2]) * S.view.s >= 0.8) p.push(a.raw.x, a.raw.y, a.raw.pr);
+  }
+  a.st.p = smoothStroke(p, 6 * S.smooth / 100 / S.view.s); // 強さ 100 で、画面上 6px くらいの揺れまでならす
 }
 
 function onMove(e) {
@@ -1179,6 +1248,7 @@ function onUp(e) {
     case 'draw':
       S.cur = null;
       if (a.st.p.length) {
+        if (!a.snap && !a.curve && S.smooth > 0) finishSmooth(a);
         const before = S.strokes.slice();
         S.strokes.push(a.st);
         pushUndo(before, a.st);
@@ -1318,6 +1388,7 @@ function renderOptions() {
         return `<button class="wd ${w === cfg.width ? 'active' : ''}" data-width="${w}" title="太さ ${w}"><i style="width:${d}px;height:${d}px"></i></button>`;
       }).join('')
       + sizeSliderHTML(cfg.width, SIZE_RANGE[t])
+      + `<span class="sep"></span><label class="fld" title="手ぶれ補正：線の波打ちをならします（0 で補正なし）">補正<input type="range" id="smooth" class="smslider" min="0" max="100" step="5" value="${S.smooth}"></label><span class="wval" id="smooth-val">${S.smooth}</span>`
       + (t === 'pen'
         ? `<span class="sep"></span><button class="toggle ${S.pen.pressure !== false ? 'active' : ''}" id="pen-pr" title="ペン（Surface ペン、Apple Pencil など）の筆圧で太さを変える">筆圧 ${S.pen.pressure !== false ? 'オン' : 'オフ'}</button>`
         : '');
@@ -1328,6 +1399,9 @@ function renderOptions() {
     box.querySelector('input[type=color]').onchange = () => renderOptions();
     box.querySelectorAll('[data-width]').forEach(b => b.onclick = () => { cfg.width = +b.dataset.width; saveToolPrefs(); renderOptions(); });
     bindSizeSlider(box, SIZE_RANGE[t], v => { cfg.width = v; });
+    const sm = box.querySelector('#smooth');
+    sm.oninput = () => { S.smooth = +sm.value; box.querySelector('#smooth-val').textContent = S.smooth; };
+    sm.onchange = () => LS.set('smooth', S.smooth);
   } else if (t === 'eraser') {
     const er = S.eraser;
     box.innerHTML = `<div class="seg" id="er-mode"><button data-v="object" class="${er.mode === 'object' ? 'active' : ''}">オブジェクト</button><button data-v="partial" class="${er.mode === 'partial' ? 'active' : ''}">部分</button></div><span class="sep"></span>`
@@ -2158,7 +2232,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=22' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=23' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
