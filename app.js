@@ -570,13 +570,26 @@ function renderOver() {
   const sb = $('#selbar');
   if (S.sel) {
     const bb = selDisplayBB();
-    const a = toScreen(bb.x0, bb.y0), b = toScreen(bb.x1, bb.y1);
+    const a = toScreen(bb.x0, bb.y0), b = toScreen(bb.x1, bb.y1), rot = S.sel.rot;
     c.setLineDash([6, 5]); c.lineWidth = 1.5; c.strokeStyle = T.accent;
-    c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
+    if (rot) {
+      const o = toScreen(rot.cx, rot.cy);
+      c.save(); c.translate(o.x, o.y); c.rotate(rot.a); c.translate(-o.x, -o.y);
+      c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
+      c.restore();
+    } else c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
     c.setLineDash([]);
-    const busy = act && (act.type === 'move' || act.type === 'scale');
+    const busy = act && (act.type === 'move' || act.type === 'scale' || act.type === 'rotate');
+    // 回転のつまみ
+    if (!act && canRotate()) {
+      const p = rotHandlePos({ x0: a.x - 6, y0: a.y - 6, x1: b.x + 6, y1: b.y + 6 });
+      c.strokeStyle = T.accent; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(p.x, a.y - 6); c.lineTo(p.x, p.y + 6); c.stroke();
+      c.fillStyle = T.paper;
+      c.beginPath(); c.arc(p.x, p.y, 6, 0, Math.PI * 2); c.fill(); c.stroke();
+    }
     // 拡大縮小のつまみ
-    if (!act || act.type !== 'move') {
+    if (!act || (act.type !== 'move' && act.type !== 'rotate')) {
       const rr = { x0: a.x - 6, y0: a.y - 6, x1: b.x + 6, y1: b.y + 6 };
       for (const h of HANDLES) {
         if ((!h.cx && rr.x1 - rr.x0 < 60) || (!h.cy && rr.y1 - rr.y0 < 60)) continue;
@@ -589,7 +602,7 @@ function renderOver() {
     else {
       sb.hidden = false;
       const bw = sb.offsetWidth, bh = sb.offsetHeight;
-      let x = (a.x + b.x) / 2 - bw / 2, y = a.y - bh - 16;
+      let x = (a.x + b.x) / 2 - bw / 2, y = a.y - bh - 16 - (canRotate() ? ROT_GAP + 6 : 0); // 回転のつまみの上へ
       if (y < 60) y = b.y + 16;
       sb.style.left = clamp(x, 8, W - bw - 8) + 'px';
       sb.style.top = clamp(y, 60, H - bh - 80) + 'px';
@@ -883,6 +896,47 @@ function commitScale() {
   if (!tf || (tf.sx === 1 && tf.sy === 1)) { render(); return; }
   mapSelection(st => scaleStroke(st, tf.ax, tf.ay, tf.sx, tf.sy));
 }
+/* ---------- 選択範囲の回転（枠の上のまるいつまみ。Shift で 15° ずつ、90° の近くでは吸い付く） ----------
+   画像は回せないので、画像が入っているときはつまみを出さない */
+const ROT_GAP = 28; // 選択枠の上辺からつまみまで（画面px）
+const canRotate = () => S.sel && ![...S.sel.set].some(isImg);
+const rotHandlePos = r => ({ x: (r.x0 + r.x1) / 2, y: r.y0 - ROT_GAP });
+function rotHandleAt(x, y, pointerType) {
+  if (!canRotate()) return false;
+  const p = rotHandlePos(selScreenRect());
+  return Math.hypot(x - p.x, y - p.y) <= (pointerType === 'touch' ? 22 : 12);
+}
+function rotateStroke(st, cx, cy, a) {
+  const p = st.p.slice(), cos = Math.cos(a), sin = Math.sin(a);
+  for (let i = 0; i < p.length; i += 3) {
+    const dx = p[i] - cx, dy = p[i + 1] - cy;
+    p[i] = cx + dx * cos - dy * sin; p[i + 1] = cy + dx * sin + dy * cos;
+  }
+  return { ...st, p };
+}
+function startRotate(pid, x, y) {
+  const bb = S.sel.bb, cx = (bb.x0 + bb.x1) / 2, cy = (bb.y0 + bb.y1) / 2, w = toWorld(x, y);
+  act = { type: 'rotate', pid, cx, cy, a0: Math.atan2(w.y - cy, w.x - cx) };
+}
+function updateRotate(e) {
+  const w = toWorld(e.clientX, e.clientY), a = act;
+  let ang = Math.atan2(w.y - a.cy, w.x - a.cx) - a.a0;
+  if (e.shiftKey) ang = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12);
+  else {
+    const q = Math.round(ang / (Math.PI / 2)) * (Math.PI / 2);
+    if (Math.abs(ang - q) < 3 * Math.PI / 180) ang = q;
+  }
+  S.sel.rot = { cx: a.cx, cy: a.cy, a: ang };
+  S.sel.preview = [...S.sel.set].map(st => rotateStroke(st, a.cx, a.cy, ang));
+  render();
+}
+function commitRotate() {
+  const rot = S.sel.rot;
+  S.sel.rot = null; S.sel.preview = null;
+  const n = rot ? Math.round(rot.a / (2 * Math.PI)) * 2 * Math.PI : 0;
+  if (!rot || Math.abs(rot.a - n) < 1e-9) { render(); return; }
+  mapSelection(st => rotateStroke(st, rot.cx, rot.cy, rot.a));
+}
 // 表示用：拡大縮小・移動中の選択範囲（ワールド座標）
 function selDisplayBB() {
   const { bb, dx, dy, tf } = S.sel;
@@ -1094,6 +1148,7 @@ function cancelAction() {
   if (act.type === 'lasso') S.lasso = null;
   if (act.type === 'move') { S.sel.dx = S.sel.dy = 0; }
   if (act.type === 'scale' && S.sel) { S.sel.tf = null; S.sel.preview = null; }
+  if (act.type === 'rotate' && S.sel) { S.sel.rot = null; S.sel.preview = null; }
   act = null;
   render();
 }
@@ -1177,7 +1232,8 @@ function startAction(e) {
       break;
     case 'lasso': {
       const h = handleAt(x, y, e.pointerType);
-      if (h) startScale(h, e.pointerId, x, y);
+      if (rotHandleAt(x, y, e.pointerType)) startRotate(e.pointerId, x, y);
+      else if (h) startScale(h, e.pointerId, x, y);
       else if (inSelection(x, y)) {
         const w = toWorld(x, y);
         act = { type: 'move', pid: e.pointerId, sx: w.x, sy: w.y };
@@ -1281,7 +1337,7 @@ function onMove(e) {
     if (S.tool === 'eraser') renderOverSoon();
     if (!act && S.tool === 'lasso') {
       const h = handleAt(e.clientX, e.clientY, e.pointerType);
-      over.style.cursor = h ? h.cur : '';
+      over.style.cursor = rotHandleAt(e.clientX, e.clientY, e.pointerType) ? 'grab' : h ? h.cur : '';
       over.classList.toggle('c-move', !h && inSelection(e.clientX, e.clientY));
     }
   }
@@ -1303,7 +1359,7 @@ function onMove(e) {
     return;
   }
   // ペン：消す・囲む・動かす途中で浮いた（筆圧が 0 近くが続いた）→ そこで終える
-  if (e.pointerType === 'pen' && act.type !== 'draw' && /^(erase|lasso|move|scale)$/.test(act.type)) {
+  if (e.pointerType === 'pen' && act.type !== 'draw' && /^(erase|lasso|move|scale|rotate)$/.test(act.type)) {
     if (!penTouching(e, true)) { if ((act.low = (act.low || 0) + 1) >= 3) liftPen(e); return; }
     act.low = 0;
   }
@@ -1339,6 +1395,7 @@ function onMove(e) {
       break;
     }
     case 'scale': updateScale(e); break;
+    case 'rotate': updateRotate(e); break;
     case 'pan':
       S.view = { ...S.view, x: S.view.x + dx, y: S.view.y + dy };
       viewChanged();
@@ -1399,6 +1456,7 @@ function endAction(a, e) {
     }
     case 'move': commitMove(); break;
     case 'scale': commitScale(); break;
+    case 'rotate': commitRotate(); break;
   }
   setCursor();
   render();
@@ -2462,7 +2520,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=33' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=34' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
