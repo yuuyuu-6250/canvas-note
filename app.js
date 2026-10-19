@@ -1717,9 +1717,11 @@ function download(blob, name) {
 const safeName = s => (s || 'board').replace(/[\\/:*?"<>|]/g, '_');
 
 async function exportPNG() {
-  const b = contentBox(S.strokes);
+  // 範囲を選択しているときは、その選択範囲だけを書き出す
+  const strokes = S.sel ? S.strokes.filter(st => S.sel.set.has(st)) : S.strokes;
+  const b = contentBox(strokes);
   if (!b) { toast('まだ何も描かれていません'); return; }
-  await Promise.all(S.strokes.filter(isImg).map(st => loadBitmap(st.a))); // 画像を読み込み終えてから
+  await Promise.all(strokes.filter(isImg).map(st => loadBitmap(st.a))); // 画像を読み込み終えてから
   const pad = 40;
   let scale = 2;
   const bw = b.x1 - b.x0 + pad * 2, bh = b.y1 - b.y0 + pad * 2;
@@ -1732,7 +1734,7 @@ async function exportPNG() {
   c.setTransform(scale, 0, 0, scale, -(b.x0 - pad) * scale, -(b.y0 - pad) * scale);
   drawBg(c, { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad }, scale, S.board.bg, L);
   c.lineCap = 'round'; c.lineJoin = 'round';
-  for (const st of S.strokes) drawStroke(c, st, L);
+  for (const st of strokes) drawStroke(c, st, L);
   cv.toBlob(blob => download(blob, safeName(S.board.name) + '.png'), 'image/png');
 }
 
