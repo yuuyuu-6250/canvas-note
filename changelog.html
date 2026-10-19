@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>変更履歴 - Canvas Note</title>
+<script>
+  try {
+    const t = JSON.parse(localStorage.getItem('theme') || '"auto"');
+    const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  } catch (e) {}
+</script>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=27">
+<style>
+  html, body { height: auto; overflow: auto; -webkit-user-select: text; user-select: text; }
+  main { max-width: 640px; margin: 0 auto; padding: calc(24px + var(--safe-t)) 16px calc(40px + var(--safe-b)); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .back { display: inline-block; margin-bottom: 16px; color: var(--accent); text-decoration: none; }
+  h2 { font-size: 13px; color: var(--muted); margin: 28px 0 6px; font-weight: 600; }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="./">← ノートに戻る</a>
+  <h1>変更履歴</h1>
+
+  <h2>2026-10-19</h2>
+  <ul>
+    <li>範囲を選択しているときは、選択した部分だけを PNG で書き出せるように（未選択なら今までどおり全体）</li>
+    <li>変更履歴ページを追加</li>
+  </ul>
+
+  <h2>2026-10-13</h2>
+  <ul>
+    <li>ペンの調整：浮かせたときと軽く書いたときの筆圧を測って自動で合わせる</li>
+    <li>ペン先が実際に触れるまで入力を無視するように</li>
+    <li>ペンの手ぶれを抑える補正を追加</li>
+    <li>フォルダを入れ子にできるように</li>
+  </ul>
+
+  <h2>2026-10-10</h2>
+  <ul>
+    <li>ボード一覧の下にクラウドの使用量を表示</li>
+    <li>PDF ごとにクラウドへ保存するか選べるように。PDF は 1 つのまとまりとして移動</li>
+    <li>画像と PDF をキャンバスに取り込めるように</li>
+    <li>オフラインでも使えるように（Service Worker、同期の再試行）</li>
+    <li>ボードのフォルダ分け。空のボードも残る</li>
+    <li>Firestore の使用量を削減</li>
+  </ul>
+
+  <h2>2026-10-07</h2>
+  <ul>
+    <li>タイルキャッシュで、移動・拡大縮小をなめらかに</li>
+    <li>大きなボードでも書き心地を維持</li>
+    <li>媒介変数の定規 x = f(t), y = g(t) を追加</li>
+    <li>ペン・蛍光ペン・消しゴムの太さスライダー</li>
+    <li>筆圧の線をなめらかに。背景の線の濃さを調整可能に</li>
+    <li>筆圧のオン/オフ切り替え。編集を即保存</li>
+  </ul>
+
+  <h2>2026-10-06</h2>
+  <ul>
+    <li>Canvas Note 公開：無限キャンバスの手書きノート</li>
+    <li>Google ログインによるクラウド同期（Firebase）</li>
+    <li>関数定規（y = ax^n、log、a^x、式の自由入力、円・円錐曲線、|x|）。直線定規はグリッドにスナップ</li>
+    <li>投げ縄：触れた線を選択、ハンドルで拡大縮小（線の太さは維持）</li>
+    <li>ダークモード</li>
+  </ul>
+</main>
+</body>
+</html>
