@@ -12,7 +12,7 @@
   } catch (e) {}
 </script>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=28">
+<link rel="stylesheet" href="style.css?v=29">
 <style>
   html, body { height: auto; overflow: auto; -webkit-user-select: text; user-select: text; }
   main { max-width: 640px; margin: 0 auto; padding: calc(24px + var(--safe-t)) 16px calc(40px + var(--safe-b)); }
@@ -21,55 +21,157 @@
   h2 { font-size: 13px; color: var(--muted); margin: 28px 0 6px; font-weight: 600; }
   ul { margin: 0; padding-left: 20px; }
   li { margin: 4px 0; }
+  h2 span { font-weight: 400; margin-left: 6px; }
 </style>
 </head>
 <body>
 <main>
   <a class="back" href="./">← ノートに戻る</a>
-  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v28</small></h1>
+  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v29</small></h1>
 
-  <h2>2026-10-19</h2>
+  <h2>v29 <span>2026-10-19</span></h2>
   <ul>
-    <li>範囲を選択しているときは、選択した部分だけを PNG で書き出せるように（未選択なら今までどおり全体）</li>
-    <li>変更履歴ページを追加。バージョン番号（v）を表示</li>
+    <li>変更履歴をバージョンごとに整理</li>
   </ul>
 
-  <h2>2026-10-13</h2>
+  <h2>v29 <span>2026-10-19</span></h2>
+  <ul>
+    <li>メニューの「変更履歴」リンクと、変更履歴ページにバージョン番号を表示</li>
+  </ul>
+
+  <h2>v27 <span>2026-10-19</span></h2>
+  <ul>
+    <li>変更履歴ページを追加（「…」メニューの一番下から）</li>
+  </ul>
+
+  <h2>v26 <span>2026-10-19</span></h2>
+  <ul>
+    <li>範囲を選択しているときは、選択した部分だけを PNG で書き出せるように（未選択なら今までどおり全体）</li>
+  </ul>
+
+  <h2>v25 <span>2026-10-13</span></h2>
   <ul>
     <li>ペンの調整：浮かせたときと軽く書いたときの筆圧を測って自動で合わせる</li>
+  </ul>
+
+  <h2>v24 <span>2026-10-13</span></h2>
+  <ul>
     <li>ペン先が実際に触れるまで入力を無視するように</li>
+  </ul>
+
+  <h2>v23 <span>2026-10-13</span></h2>
+  <ul>
     <li>ペンの手ぶれを抑える補正を追加</li>
+  </ul>
+
+  <h2>v22 <span>2026-10-13</span></h2>
+  <ul>
     <li>フォルダを入れ子にできるように</li>
   </ul>
 
-  <h2>2026-10-10</h2>
+  <h2>v21 <span>2026-10-10</span></h2>
   <ul>
     <li>ボード一覧の下にクラウドの使用量を表示</li>
-    <li>PDF ごとにクラウドへ保存するか選べるように。PDF は 1 つのまとまりとして移動</li>
+  </ul>
+
+  <h2>v20 <span>2026-10-10</span></h2>
+  <ul>
+    <li>PDF ごとにクラウドへ保存するか選べるように</li>
+    <li>PDF は 1 つのまとまりとして移動</li>
+  </ul>
+
+  <h2>v19 <span>2026-10-10</span></h2>
+  <ul>
     <li>画像と PDF をキャンバスに取り込めるように</li>
-    <li>オフラインでも使えるように（Service Worker、同期の再試行）</li>
-    <li>ボードのフォルダ分け。空のボードも残る</li>
+  </ul>
+
+  <h2>v18 <span>2026-10-10</span></h2>
+  <ul>
+    <li>オフラインでも使えるように（Service Worker、同期の再試行、安全な再接続）</li>
+  </ul>
+
+  <h2>v17 <span>2026-10-10</span></h2>
+  <ul>
+    <li>ボードのフォルダ分け</li>
+    <li>自分で作った空のボードも残る</li>
+  </ul>
+
+  <h2>v16 <span>2026-10-10</span></h2>
+  <ul>
     <li>Firestore の使用量を削減</li>
   </ul>
 
-  <h2>2026-10-07</h2>
+  <h2>v15 <span>2026-10-07</span></h2>
   <ul>
     <li>タイルキャッシュで、移動・拡大縮小をなめらかに</li>
-    <li>大きなボードでも書き心地を維持</li>
-    <li>媒介変数の定規 x = f(t), y = g(t) を追加</li>
-    <li>ペン・蛍光ペン・消しゴムの太さスライダー</li>
-    <li>筆圧の線をなめらかに。背景の線の濃さを調整可能に</li>
-    <li>筆圧のオン/オフ切り替え。編集を即保存</li>
   </ul>
 
-  <h2>2026-10-06</h2>
+  <h2>v14 <span>2026-10-07</span></h2>
+  <ul>
+    <li>大きなボードでも書き心地を維持</li>
+  </ul>
+
+  <h2>v13 <span>2026-10-07</span></h2>
+  <ul>
+    <li>媒介変数の定規 x = f(t), y = g(t) を追加</li>
+  </ul>
+
+  <h2>v12 <span>2026-10-07</span></h2>
+  <ul>
+    <li>ペン・蛍光ペン・消しゴムの太さスライダー</li>
+  </ul>
+
+  <h2>v11 <span>2026-10-07</span></h2>
+  <ul>
+    <li>筆圧の線をなめらかに</li>
+    <li>背景の線の濃さを調整可能に</li>
+  </ul>
+
+  <h2>v10 <span>2026-10-07</span></h2>
+  <ul>
+    <li>筆圧のオン/オフ切り替え</li>
+    <li>編集を即保存</li>
+  </ul>
+
+  <h2>v9 <span>2026-10-06</span></h2>
+  <ul>
+    <li>関数定規：x と y の式（円・円錐曲線など）</li>
+  </ul>
+
+  <h2>v8 <span>2026-10-06</span></h2>
+  <ul>
+    <li>投げ縄の選択範囲をハンドルで拡大縮小（線の太さは維持）</li>
+  </ul>
+
+  <h2>v7 <span>2026-10-06</span></h2>
+  <ul>
+    <li>投げ縄：触れた線を選択</li>
+    <li>ダークモード</li>
+  </ul>
+
+  <h2>v6 <span>2026-10-06</span></h2>
+  <ul>
+    <li>直線定規をグリッドにスナップ</li>
+    <li>関数定規で |x| に対応</li>
+  </ul>
+
+  <h2>v5 <span>2026-10-06</span></h2>
+  <ul>
+    <li>関数定規の自由入力（キャンバスに固定）</li>
+  </ul>
+
+  <h2>v4 <span>2026-10-06</span></h2>
+  <ul>
+    <li>ファイルにバージョン番号を付け、更新時に古いキャッシュが混ざらないように</li>
+  </ul>
+
+  <h2>v1〜v3 <span>2026-10-06</span></h2>
   <ul>
     <li>Canvas Note 公開：無限キャンバスの手書きノート</li>
     <li>Google ログインによるクラウド同期（Firebase）</li>
-    <li>関数定規（y = ax^n、log、a^x、式の自由入力、円・円錐曲線、|x|）。直線定規はグリッドにスナップ</li>
-    <li>投げ縄：触れた線を選択、ハンドルで拡大縮小（線の太さは維持）</li>
-    <li>ダークモード</li>
+    <li>関数定規（y = ax^n、log、a^x）</li>
   </ul>
+
 </main>
 </body>
 </html>
