@@ -212,7 +212,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 #selbar[hidden] { display: none; }
 
 /* ポップオーバー */
-.pop { position: fixed; z-index: 20; padding: 10px; min-width: 240px; max-width: calc(100vw - 20px); }
+.pop { position: fixed; z-index: 20; padding: 10px; min-width: 240px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 20px); overflow-y: auto; overscroll-behavior: contain; }
 .pop[hidden] { display: none; }
 .pop-label { font-size: 12px; color: var(--muted); margin: 6px 2px 6px; }
 .pop-label:first-child { margin-top: 0; }

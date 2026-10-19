@@ -12,9 +12,10 @@
   } catch (e) {}
 </script>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=30">
+<link rel="stylesheet" href="style.css?v=31">
 <style>
-  html, body { height: auto; overflow: auto; -webkit-user-select: text; user-select: text; }
+  html { height: auto; overflow-y: auto; }
+  body { height: auto; overflow: visible; overscroll-behavior: auto; -webkit-user-select: text; user-select: text; touch-action: pan-y; }
   main { max-width: 640px; margin: 0 auto; padding: calc(24px + var(--safe-t)) 16px calc(40px + var(--safe-b)); }
   h1 { font-size: 20px; margin: 0 0 4px; }
   .back { display: inline-block; margin-bottom: 16px; color: var(--accent); text-decoration: none; }
@@ -27,9 +28,10 @@
 <body>
 <main>
   <a class="back" href="./">← ノートに戻る</a>
-  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v30</small></h1>
+  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v31</small></h1>
 
   <ul class="log">
+    <li><b>v31</b>: メニューが画面に収まらないときにスクロールできるように、変更履歴ページのスクロールを修正</li>
     <li><b>v30</b>: 変更履歴を「vXX: 変更内容」の 1 行形式に</li>
     <li><b>v29</b>: 変更履歴をバージョンごとに整理</li>
     <li><b>v28</b>: メニューの「変更履歴」リンクと、変更履歴ページにバージョン番号を表示</li>
