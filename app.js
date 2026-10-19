@@ -577,6 +577,12 @@ function renderOver() {
       c.save(); c.translate(o.x, o.y); c.rotate(rot.a); c.translate(-o.x, -o.y);
       c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
       c.restore();
+      let deg = Math.round(rot.a * 180 / Math.PI) % 360;
+      if (deg > 180) deg -= 360; else if (deg <= -180) deg += 360;
+      c.font = '600 13px system-ui, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.lineWidth = 4; c.strokeStyle = T.paper; c.strokeText(deg + '°', o.x, o.y);
+      c.fillStyle = T.accent; c.fillText(deg + '°', o.x, o.y);
+      c.lineWidth = 1.5;
     } else c.strokeRect(a.x - 6, a.y - 6, b.x - a.x + 12, b.y - a.y + 12);
     c.setLineDash([]);
     const busy = act && (act.type === 'move' || act.type === 'scale' || act.type === 'rotate');
@@ -896,7 +902,7 @@ function commitScale() {
   if (!tf || (tf.sx === 1 && tf.sy === 1)) { render(); return; }
   mapSelection(st => scaleStroke(st, tf.ax, tf.ay, tf.sx, tf.sy));
 }
-/* ---------- 選択範囲の回転（枠の上のまるいつまみ。Shift で 15° ずつ、90° の近くでは吸い付く） ----------
+/* ---------- 選択範囲の回転（枠の上のまるいつまみ。Shift で 15° ずつ、30° と 45° の倍数の近くでは吸い付く） ----------
    画像は回せないので、画像が入っているときはつまみを出さない */
 const ROT_GAP = 28; // 選択枠の上辺からつまみまで（画面px）
 const canRotate = () => S.sel && ![...S.sel.set].some(isImg);
@@ -923,8 +929,12 @@ function updateRotate(e) {
   let ang = Math.atan2(w.y - a.cy, w.x - a.cx) - a.a0;
   if (e.shiftKey) ang = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12);
   else {
-    const q = Math.round(ang / (Math.PI / 2)) * (Math.PI / 2);
-    if (Math.abs(ang - q) < 3 * Math.PI / 180) ang = q;
+    // 30° と 45° の倍数（30, 45, 60, 90, 120, 135 …）の近くでは吸い付く
+    const deg = ang * 180 / Math.PI;
+    for (const step of [30, 45]) {
+      const q = Math.round(deg / step) * step;
+      if (Math.abs(deg - q) < 3) { ang = q * Math.PI / 180; break; }
+    }
   }
   S.sel.rot = { cx: a.cx, cy: a.cy, a: ang };
   S.sel.preview = [...S.sel.set].map(st => rotateStroke(st, a.cx, a.cy, ang));
@@ -2520,7 +2530,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=34' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=35' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
