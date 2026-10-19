@@ -336,6 +336,41 @@ async function reconcileInner() {
   App.setSyncStatus(firstDirtyAt ? 'pending' : 'ok');
 }
 
+/* ---------- テンプレート ----------
+     users/{uid}/meta/templates  { items: { [id]: { name, data: 線の JSON, updatedAt, deleted } } }
+   線だけで小さいので全部まとめて1ドキュメント。項目ごとに新しい方が勝つ */
+const tplDoc = () => F.doc(db, 'users', user.uid, 'meta', 'templates');
+let tplUnsub = null, tplRemote = null; // tplRemote：クラウドの items（受け取るまでは null ＝送らない）
+function listenTemplates() {
+  tplUnsub = F.onSnapshot(tplDoc(), { includeMetadataChanges: true }, snap => {
+    if (snap.metadata.hasPendingWrites || snap.metadata.fromCache) return;
+    tplRemote = (snap.exists() && snap.data().items) || {};
+    mergeTemplates();
+  }, err => console.error(err));
+}
+function mergeTemplates() {
+  if (!user || !tplRemote) return;
+  const byId = new Map(App.templates().map(t => [t.id, t]));
+  let pulled = false;
+  for (const [id, r] of Object.entries(tplRemote)) {
+    const l = byId.get(id);
+    if (l && l.updatedAt >= r.updatedAt) continue;
+    byId.set(id, { id, name: r.name, strokes: r.deleted ? [] : JSON.parse(r.data || '[]'), updatedAt: r.updatedAt, deleted: !!r.deleted });
+    pulled = true;
+  }
+  if (pulled) App.setTemplates([...byId.values()]);
+  const up = {};
+  for (const t of byId.values()) {
+    const r = tplRemote[t.id];
+    if (!r || t.updatedAt > r.updatedAt) up[t.id] = { name: t.name, data: t.deleted ? '' : JSON.stringify(t.strokes), updatedAt: t.updatedAt, deleted: !!t.deleted };
+  }
+  if (!Object.keys(up).length) return;
+  // 送れなかったら、次に変更したとき・つながったときにもう一度
+  F.setDoc(tplDoc(), { items: up }, { merge: true })
+    .then(() => { if (tplRemote) Object.assign(tplRemote, up); })
+    .catch(err => console.error(err));
+}
+
 /* ---------- 目録を見張る（ドキュメント1つだけ） ----------
    オフラインで始めても、つながれば Firebase が自動で受け取り、そこから同期が始まる */
 function startListening() {
@@ -368,17 +403,19 @@ function startListening() {
 A.onAuthStateChanged(auth, u => {
   user = u;
   if (unsub) { unsub(); unsub = null; }
+  if (tplUnsub) { tplUnsub(); tplUnsub = null; }
   remote = new Map();
   remoteAssets = {};
+  tplRemote = null;
   ready = false;
   App.setSyncUser(u ? (u.email || u.displayName || 'ログイン中') : null);
-  if (u) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); }
+  if (u) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); listenTemplates(); }
   else App.setSyncStatus('signedout');
 });
 A.getRedirectResult(auth).catch(err => App.setSyncStatus('error', err.message));
 
 const pushSoon = () => { clearTimeout(pushTimer); enqueue(reconcile); };
-window.addEventListener('online', () => { retryDelay = 0; pushSoon(); });
+window.addEventListener('online', () => { retryDelay = 0; pushSoon(); mergeTemplates(); });
 window.addEventListener('offline', () => user && App.setSyncStatus('offline'));
 // 画面を離れるときは待たずに送る
 document.addEventListener('visibilitychange', () => {
@@ -402,6 +439,7 @@ window.Sync = {
   syncNow: pushSoon,
   fetchAsset,
   usage,
+  templatesChanged: mergeTemplates,
   // ローカルで変更があったら呼ばれる。手を止めて PUSH_IDLE 後に送る（最長 PUSH_MAX）
   changed() {
     if (!user) return;

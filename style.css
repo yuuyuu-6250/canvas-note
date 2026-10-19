@@ -81,6 +81,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .ibtn.active { background: var(--accent-soft); color: var(--accent); }
 .ibtn:disabled { opacity: .3; cursor: default; background: none; }
 .ibtn.danger { color: var(--danger); }
+.ibtn[hidden] { display: none; }
 .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; flex: none; }
 
 /* 上部 */
@@ -210,6 +211,14 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
   position: fixed; z-index: 9; display: flex; align-items: center; gap: 2px; padding: 4px 6px;
 }
 #selbar[hidden] { display: none; }
+
+/* テンプレート */
+#tpl-list { display: grid; gap: 2px; max-width: 300px; }
+.tpl { display: flex; align-items: center; gap: 4px; }
+.tpl-use { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: 8px; text-align: left; }
+.tpl-use:hover { background: var(--hover); }
+.tpl-use canvas { position: static; flex: none; border-radius: 6px; background: var(--paper); border: 1px solid var(--line); }
+.tpl-use span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ポップオーバー */
 .pop { position: fixed; z-index: 20; padding: 10px; min-width: 240px; max-width: calc(100vw - 20px); max-height: calc(100dvh - 20px); overflow-y: auto; overscroll-behavior: contain; }

@@ -18,7 +18,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=32">
+<link rel="stylesheet" href="style.css?v=33">
 </head>
 <body>
 <canvas id="main"></canvas>
@@ -49,6 +49,7 @@
     <span class="sep"></span>
     <button class="ibtn" id="btn-ruler" data-icon="ruler" title="定規 (R)"></button>
     <button class="ibtn" id="btn-import" data-icon="image" title="画像・PDF を取り込む（ドラッグ＆ドロップ・貼り付けでも可）"></button>
+    <button class="ibtn pop-trigger" id="btn-tpl" data-icon="shapes" title="テンプレート"></button>
     <span class="sep"></span>
     <button class="ibtn" id="btn-undo" data-icon="undo" title="元に戻す (Ctrl+Z)"></button>
     <button class="ibtn" id="btn-redo" data-icon="redo" title="やり直す (Ctrl+Shift+Z)"></button>
@@ -63,6 +64,7 @@
   <div class="swatches" id="sel-colors"></div>
   <span class="sep"></span>
   <button class="toggle" id="sel-cloud" hidden></button>
+  <button class="ibtn" id="sel-tpl" data-icon="shapes" title="テンプレートに保存（線だけ。画像は入りません）"></button>
   <button class="ibtn" id="sel-dup" data-icon="copy" title="複製"></button>
   <button class="ibtn danger" id="sel-del" data-icon="trash" title="削除 (Delete)"></button>
 </div>
@@ -111,6 +113,11 @@
   <button class="mitem" data-act="pencal">ペンの調整…（自動で合わせる）</button>
   <p class="hint">ペンを近づけただけで書けてしまうときは上げてください。軽く書いた線が途切れるときは下げてください（0 で判定なし）。</p>
   <a class="about-link" href="changelog.html">変更履歴</a>
+</div>
+
+<div id="pop-tpl" class="pop chip" hidden>
+  <div class="pop-label">テンプレート（押すと画面の真ん中に置きます）</div>
+  <div id="tpl-list"></div>
 </div>
 
 <div id="pop-sync" class="pop chip" hidden>
@@ -172,8 +179,8 @@
 </div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=32"></script>
-<script src="ruler.js?v=32"></script>
-<script src="app.js?v=32"></script>
+<script src="firebase-config.js?v=33"></script>
+<script src="ruler.js?v=33"></script>
+<script src="app.js?v=33"></script>
 </body>
 </html>

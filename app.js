@@ -942,6 +942,92 @@ function recolorSelection(color) {
   if (S.sel) mapSelection(st => (isImg(st) ? st : { ...st, c: color }));
 }
 
+/* ---------- テンプレート：よく使う図（ベンゼン環など）を保存して、すぐ呼び出す ----------
+   保存するのは線だけ（画像は容量を食うので入れない）。左上を (0, 0) にそろえて持つ
+   端末内は localStorage、ログイン中は sync.js がクラウドの1ドキュメントと同期する
+   { id, name, strokes, updatedAt, deleted } … 消したものも印だけ残す（ほかの端末に伝えるため） */
+let templates = LS.get('templates', []);
+const liveTemplates = () => templates.filter(t => !t.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
+function saveTemplates() {
+  LS.set('templates', templates);
+  if (!$('#pop-tpl').hidden) renderTemplates();
+  if (window.Sync && window.Sync.templatesChanged) window.Sync.templatesChanged();
+}
+function saveSelectionAsTemplate() {
+  if (!S.sel) return;
+  const lines = S.strokes.filter(st => S.sel.set.has(st) && !isImg(st));
+  if (!lines.length) { toast('画像はテンプレートに入れられません'); return; }
+  const name = (prompt('テンプレートの名前', '') || '').trim();
+  if (!name) return;
+  const b = contentBox(lines), r2 = v => Math.round(v * 100) / 100;
+  const strokes = lines.map(st => {
+    const p = st.p.slice();
+    for (let i = 0; i < p.length; i += 3) { p[i] = r2(p[i] - b.x0); p[i + 1] = r2(p[i + 1] - b.y0); }
+    const n = { ...st, p };
+    delete n.id; delete n.g;
+    return n;
+  });
+  templates.push({ id: uid(), name, strokes, updatedAt: Date.now() });
+  saveTemplates();
+  toast(lines.length < S.sel.set.size ? `「${name}」を保存しました（画像は除きました）` : `「${name}」を保存しました`);
+}
+// 画面の真ん中に置いて、そのまま動かせるよう選んだ状態にする
+function placeTemplate(t) {
+  closePops();
+  const b = contentBox(t.strokes);
+  if (!b) return;
+  const c = toWorld(W / 2, H / 2), ox = c.x - (b.x0 + b.x1) / 2, oy = c.y - (b.y0 + b.y1) / 2;
+  const items = t.strokes.map(st => {
+    const p = st.p.slice();
+    for (let i = 0; i < p.length; i += 3) { p[i] += ox; p[i + 1] += oy; }
+    return { ...st, id: uid(), p };
+  });
+  const before = S.strokes.slice();
+  S.strokes = S.strokes.concat(items);
+  pushUndo(before);
+  setTool('lasso');
+  setSelection(new Set(items));
+}
+async function deleteTemplate(t) {
+  const ok = await askChoice('テンプレートを削除', `「${t.name}」を削除しますか？`, [
+    { label: 'キャンセル', value: false }, { label: '削除', value: true, primary: true },
+  ]);
+  if (!ok) return;
+  Object.assign(t, { deleted: true, strokes: [], updatedAt: Date.now() });
+  saveTemplates();
+}
+function renderTemplates() {
+  const box = $('#tpl-list'), list = liveTemplates();
+  box.innerHTML = '';
+  if (!list.length) {
+    box.innerHTML = '<p class="hint">投げ縄で線を選んで、選択バーの「テンプレートに保存」から追加できます（画像は入れられません）。</p>';
+    return;
+  }
+  for (const t of list) {
+    const li = document.createElement('div');
+    li.className = 'tpl';
+    li.innerHTML = '<button class="tpl-use"><canvas></canvas><span></span></button><button class="ibtn" data-icon="trash" title="削除"></button>';
+    li.querySelector('span').textContent = t.name;
+    drawThumb(li.querySelector('canvas'), t.strokes);
+    const [use, del] = li.querySelectorAll('button');
+    use.onclick = () => placeTemplate(t);
+    del.onclick = () => deleteTemplate(t);
+    fillIcons(li);
+    box.appendChild(li);
+  }
+}
+function drawThumb(cv, strokes) {
+  const size = 56, pad = 5, dpr = window.devicePixelRatio || 1, b = contentBox(strokes);
+  cv.width = cv.height = size * dpr;
+  cv.style.width = cv.style.height = size + 'px';
+  if (!b) return;
+  const c = cv.getContext('2d');
+  const k = Math.min((size - pad * 2) / (b.x1 - b.x0 || 1), (size - pad * 2) / (b.y1 - b.y0 || 1));
+  c.setTransform(k * dpr, 0, 0, k * dpr, (size / 2 - (b.x0 + b.x1) / 2 * k) * dpr, (size / 2 - (b.y0 + b.y1) / 2 * k) * dpr);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const st of strokes) drawStroke(c, st);
+}
+
 /* =========================================================
    入力（マウス・ペン・タッチ）
    ========================================================= */
@@ -1399,6 +1485,7 @@ const ICONS = {
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z"/>',
   cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  shapes: '<path d="M8.3 10a.7.7 0 0 1-.6-1L11.4 3a.7.7 0 0 1 1.2 0L16.3 9a.7.7 0 0 1-.6 1Z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
 };
@@ -1489,6 +1576,7 @@ function renderSelColors() {
   box.querySelectorAll('[data-color]').forEach(b => b.onclick = () => recolorSelection(b.dataset.color));
   // 画像を選んでいるときは「クラウドに保存するか」の切り替え
   const imgs = S.sel ? [...S.sel.set].filter(isImg) : [], cb = $('#sel-cloud');
+  $('#sel-tpl').hidden = !S.sel || imgs.length === S.sel.set.size; // 画像だけのときはテンプレートにできない
   cb.hidden = !imgs.length || !window.FIREBASE_CONFIG;
   if (!cb.hidden) {
     const on = imgs.some(st => !st.nc);
@@ -1686,6 +1774,8 @@ $('#btn-more').onclick = e => openPop($('#pop-more'), e.currentTarget);
 $('#zoom').onclick = resetZoom;
 $('#sel-del').onclick = deleteSelection;
 $('#sel-dup').onclick = duplicateSelection;
+$('#sel-tpl').onclick = saveSelectionAsTemplate;
+$('#btn-tpl').onclick = e => { renderTemplates(); openPop($('#pop-tpl'), e.currentTarget); };
 
 /* ---------- 表示 ---------- */
 function resetZoom() { zoomAt(W / 2, H / 2, 1 / S.view.s); }
@@ -2330,6 +2420,13 @@ window.App = {
   setSyncStatus(status, msg = '') { syncState.status = status; syncState.msg = msg; renderSync(); },
   setSyncUser(u) { syncState.user = u; renderSync(); renderUsage(); },
   usageChanged() { if ($('#drawer').classList.contains('open')) renderUsage(); },
+  templates: () => templates,
+  // クラウドと突き合わせた結果で置き換える（ここからは Sync に知らせない）
+  setTemplates(list) {
+    templates = list;
+    LS.set('templates', templates);
+    if (!$('#pop-tpl').hidden) renderTemplates();
+  },
   syncReady() {},
 };
 
@@ -2365,7 +2462,7 @@ let syncTries = 0;
 function startSync() {
   if (!window.FIREBASE_CONFIG || window.Sync) return;
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=25' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=33' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
