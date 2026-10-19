@@ -39,7 +39,8 @@ self.addEventListener('fetch', e => {
     // ページ：ネット優先。3秒待っても来なければ、しまってあるものを出す
     e.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      const net = fetch(req).then(res => { if (res.ok) cache.put(pageKey(url), res.clone()); return res; });
+      // ブラウザの HTTP キャッシュ（GitHub Pages は 10 分）も通さず、毎回サーバーに確かめる
+      const net = fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' }).then(res => { if (res.ok) cache.put(pageKey(url), res.clone()); return res; });
       const timeout = new Promise(r => setTimeout(r, 3000));
       try {
         const res = await Promise.race([net, timeout]);
@@ -70,7 +71,7 @@ self.addEventListener('message', e => {
         const url = new URL(u);
         if (!cacheable(url)) continue;
         if (u === e.data.page) { // 今のページ
-          const res = await fetch(url.origin + url.pathname);
+          const res = await fetch(url.origin + url.pathname, { cache: 'no-cache' });
           if (res.ok) await cache.put(pageKey(url), res);
           continue;
         }
