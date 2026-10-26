@@ -2504,11 +2504,12 @@ window.App = {
   syncReady() {},
 };
 
-/* ---------- ログイン画面：ログインするまでノートを見せない ----------
-   クラウドに保存するのは ALLOWED_EMAILS のアカウントだけ。ほかのアカウントはこの端末だけに保存する
-   （本当の守りは Firestore のルール。firestore.rules と同じアカウントにそろえる） */
-const ALLOWED_EMAILS = ['yuuyuunosabu6250@gmail.com', 'muratasensor@gmail.com'];
-const isAllowed = u => !!u && u.emailVerified !== false && ALLOWED_EMAILS.includes((u.email || '').toLowerCase());
+/* ---------- ログイン画面：ログインするまでノートを見せない（Firebase を使わない設定なら出さない） ----------
+   クラウドに保存するのは ALLOWED_EMAILS（firebase-config.js）のアカウントだけ。空なら誰でも。
+   ほかのアカウントはこの端末だけに保存する（本当の守りは Firestore のルール） */
+const ALLOWED_EMAILS = (window.ALLOWED_EMAILS || []).map(e => e.toLowerCase());
+const isAllowed = u => !!u && u.emailVerified !== false
+  && (!ALLOWED_EMAILS.length || ALLOWED_EMAILS.includes((u.email || '').toLowerCase()));
 const locked = () => !$('#gate').hidden;
 const GATE_MSG = {
   checking: '確認中…',
@@ -2559,11 +2560,11 @@ resize();
 // 同期の仕組みを読み込む。読み込めなかったら（オフラインなど）、つながったときにもう一度
 let syncTries = 0;
 function startSync() {
-  if (!window.FIREBASE_CONFIG) { setGate('error'); return; }
+  if (!window.FIREBASE_CONFIG) { setGate('ok'); return; } // 同期なし：端末内だけで使う
   if (window.Sync) return;
   if (locked()) setGate('checking');
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=37' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=38' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {

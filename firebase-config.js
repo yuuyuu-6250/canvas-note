@@ -8,3 +8,7 @@ window.FIREBASE_CONFIG = {
   messagingSenderId: '627935157314',
   appId: '1:627935157314:web:01cc0bd389556f9b4b61db',
 };
+
+// クラウドに保存してよいアカウント（Google のメールアドレス）。ほかのアカウントはこの端末だけに保存する。
+// 空 [] にすると、ログインした人は誰でもクラウドに保存する。firestore.rules と同じアカウントにそろえる。
+window.ALLOWED_EMAILS = ['yuuyuunosabu6250@gmail.com', 'muratasensor@gmail.com'];

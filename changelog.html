@@ -12,7 +12,7 @@
   } catch (e) {}
 </script>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=37">
+<link rel="stylesheet" href="style.css?v=38">
 <style>
   html { height: auto; overflow-y: auto; }
   body { height: auto; overflow: visible; overscroll-behavior: auto; -webkit-user-select: text; user-select: text; touch-action: pan-y; }
@@ -28,9 +28,10 @@
 <body>
 <main>
   <a class="back" href="./">← ノートに戻る</a>
-  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v37</small></h1>
+  <h1>変更履歴 <small style="font-size:12px;color:var(--muted);font-weight:400">現在 v38</small></h1>
 
   <ul class="log">
+    <li><b>v38</b>: 配布用 zip と構築手順（README）を追加。許可するアカウントを firebase-config.js で設定できるように、Firebase なしでも使えるように</li>
     <li><b>v37</b>: 許可したアカウント以外でもログインして使えるように（クラウドには保存せず、この端末だけに保存）</li>
     <li><b>v36</b>: ログイン画面を追加（許可したアカウントでログインしないと使えない）</li>
     <li><b>v35</b>: 回転で 30°・45°・60°・120° など（30° と 45° の倍数）にも吸い付くように、回転中に角度を表示</li>
