@@ -401,15 +401,16 @@ function startListening() {
 }
 
 A.onAuthStateChanged(auth, u => {
-  user = App.authChanged(u) ? u : null; // 許可していないアカウントでは同期しない
+  user = App.authChanged(u) ? u : null; // 許可していないアカウントは同期しない（この端末だけに保存）
   if (unsub) { unsub(); unsub = null; }
   if (tplUnsub) { tplUnsub(); tplUnsub = null; }
   remote = new Map();
   remoteAssets = {};
   tplRemote = null;
   ready = false;
-  App.setSyncUser(user ? (user.email || user.displayName || 'ログイン中') : null);
+  App.setSyncUser(u ? (u.email || u.displayName || 'ログイン中') : null);
   if (user) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); listenTemplates(); }
+  else if (u) App.setSyncStatus('local', 'このアカウントはクラウドに保存しません');
   else App.setSyncStatus('signedout');
 });
 A.getRedirectResult(auth).catch(err => App.setSyncStatus('error', err.message));

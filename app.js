@@ -2425,7 +2425,7 @@ function toast(msg) {
 /* =========================================================
    クラウド同期との接続（sync.js から使う）
    ========================================================= */
-const SYNC_LABEL = { off: '同期オフ', signedout: 'ログイン', pending: '未送信', syncing: '同期中…', ok: '同期済み', offline: 'オフライン', error: '同期エラー' };
+const SYNC_LABEL = { off: '同期オフ', signedout: 'ログイン', local: 'この端末だけ', pending: '未送信', syncing: '同期中…', ok: '同期済み', offline: 'オフライン', error: '同期エラー' };
 const syncState = { status: 'off', user: null, msg: '' };
 
 function renderSync() {
@@ -2487,11 +2487,10 @@ window.App = {
   },
   setSyncStatus(status, msg = '') { syncState.status = status; syncState.msg = msg; renderSync(); },
   setSyncUser(u) { syncState.user = u; renderSync(); renderUsage(); },
-  // ログインの状態が変わった。許可したアカウントなら true（そのときだけ同期する）
+  // ログインの状態が変わった。クラウドに保存してよいアカウントなら true（そのときだけ同期する）
   authChanged(u) {
-    if (!u) setGate('out');
-    else if (isAllowed(u)) setGate('ok');
-    else setGate('denied', u.email || '');
+    setGate(u ? 'ok' : 'out');
+    if (u && !isAllowed(u)) toast('このアカウントでは、ノートはこの端末だけに保存します');
     return isAllowed(u);
   },
   usageChanged() { if ($('#drawer').classList.contains('open')) renderUsage(); },
@@ -2505,23 +2504,22 @@ window.App = {
   syncReady() {},
 };
 
-/* ---------- ログイン画面：許可したアカウントでログインするまで、ノートを見せない ----------
-   本当の守りは Firestore のルール（同じアカウントだけ読み書きできる）。こちらは画面の鍵 */
+/* ---------- ログイン画面：ログインするまでノートを見せない ----------
+   クラウドに保存するのは ALLOWED_EMAILS のアカウントだけ。ほかのアカウントはこの端末だけに保存する
+   （本当の守りは Firestore のルール。firestore.rules と同じアカウントにそろえる） */
 const ALLOWED_EMAILS = ['yuuyuunosabu6250@gmail.com', 'muratasensor@gmail.com'];
 const isAllowed = u => !!u && u.emailVerified !== false && ALLOWED_EMAILS.includes((u.email || '').toLowerCase());
 const locked = () => !$('#gate').hidden;
 const GATE_MSG = {
   checking: '確認中…',
   out: 'ログインしてください',
-  denied: email => `${email} では使えません。`,
   error: 'ログインの準備ができませんでした。ネットにつないでから開き直してください。',
 };
 function setGate(state, email = '') {
   const m = GATE_MSG[state];
   $('#gate').hidden = state === 'ok';
   $('#gate-msg').textContent = typeof m === 'function' ? m(email) : m || '';
-  $('#gate-login').hidden = !(state === 'out' || state === 'denied');
-  $('#gate-login').textContent = state === 'denied' ? '別のアカウントでログイン' : 'Google でログイン';
+  $('#gate-login').hidden = state !== 'out';
   if (state !== 'ok') { closePops(); closeDrawer(); }
 }
 $('#gate-login').onclick = async () => {
@@ -2565,7 +2563,7 @@ function startSync() {
   if (window.Sync) return;
   if (locked()) setGate('checking');
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=36' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=37' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
