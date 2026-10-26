@@ -401,15 +401,15 @@ function startListening() {
 }
 
 A.onAuthStateChanged(auth, u => {
-  user = u;
+  user = App.authChanged(u) ? u : null; // 許可していないアカウントでは同期しない
   if (unsub) { unsub(); unsub = null; }
   if (tplUnsub) { tplUnsub(); tplUnsub = null; }
   remote = new Map();
   remoteAssets = {};
   tplRemote = null;
   ready = false;
-  App.setSyncUser(u ? (u.email || u.displayName || 'ログイン中') : null);
-  if (u) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); listenTemplates(); }
+  App.setSyncUser(user ? (user.email || user.displayName || 'ログイン中') : null);
+  if (user) { App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline'); startListening(); listenTemplates(); }
   else App.setSyncStatus('signedout');
 });
 A.getRedirectResult(auth).catch(err => App.setSyncStatus('error', err.message));
@@ -428,6 +428,7 @@ window.addEventListener('pagehide', () => { if (user && firstDirtyAt) pushSoon()
 window.Sync = {
   async signIn() {
     const provider = new A.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' }); // 毎回アカウントを選べるように
     try { await A.signInWithPopup(auth, provider); }
     catch (err) {
       if (err.code === 'auth/popup-blocked' || err.code === 'auth/operation-not-supported-in-this-environment') {
@@ -436,6 +437,7 @@ window.Sync = {
     }
   },
   signOut: () => A.signOut(auth),
+  currentUser: () => auth.currentUser,
   syncNow: pushSoon,
   fetchAsset,
   usage,

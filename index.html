@@ -18,9 +18,19 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=35">
+<link rel="stylesheet" href="style.css?v=36">
 </head>
 <body>
+<!-- ログイン画面（許可したアカウントでログインするまで、ノートを見せない） -->
+<div id="gate">
+  <div class="gate-box">
+    <img src="icon.svg" width="56" height="56" alt="">
+    <h1>Canvas Note</h1>
+    <p id="gate-msg">確認中…</p>
+    <button id="gate-login" hidden>Google でログイン</button>
+  </div>
+</div>
+
 <canvas id="main"></canvas>
 <canvas id="overlay"></canvas>
 
@@ -179,8 +189,8 @@
 </div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=35"></script>
-<script src="ruler.js?v=35"></script>
-<script src="app.js?v=35"></script>
+<script src="firebase-config.js?v=36"></script>
+<script src="ruler.js?v=36"></script>
+<script src="app.js?v=36"></script>
 </body>
 </html>

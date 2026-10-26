@@ -1504,7 +1504,7 @@ over.addEventListener('wheel', e => {
    ========================================================= */
 const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName);
 document.addEventListener('keydown', e => {
-  if (typing()) return;
+  if (typing() || locked()) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
   if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
@@ -2090,13 +2090,13 @@ $('#file-media').addEventListener('change', e => {
 // ファイルをキャンバスに落とす
 window.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
 window.addEventListener('drop', e => {
-  if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+  if (!e.dataTransfer || !e.dataTransfer.files.length || locked()) return;
   e.preventDefault();
   importFiles(e.dataTransfer.files, toWorld(e.clientX, e.clientY));
 });
 // 貼り付け（スクリーンショットなど）
 document.addEventListener('paste', e => {
-  if (typing() || !e.clipboardData) return;
+  if (typing() || locked() || !e.clipboardData) return;
   const files = [...e.clipboardData.files].filter(f => /^image\//.test(f.type) || f.type === 'application/pdf');
   if (files.length) { e.preventDefault(); importFiles(files); }
 });
@@ -2487,6 +2487,13 @@ window.App = {
   },
   setSyncStatus(status, msg = '') { syncState.status = status; syncState.msg = msg; renderSync(); },
   setSyncUser(u) { syncState.user = u; renderSync(); renderUsage(); },
+  // ログインの状態が変わった。許可したアカウントなら true（そのときだけ同期する）
+  authChanged(u) {
+    if (!u) setGate('out');
+    else if (isAllowed(u)) setGate('ok');
+    else setGate('denied', u.email || '');
+    return isAllowed(u);
+  },
   usageChanged() { if ($('#drawer').classList.contains('open')) renderUsage(); },
   templates: () => templates,
   // クラウドと突き合わせた結果で置き換える（ここからは Sync に知らせない）
@@ -2496,6 +2503,32 @@ window.App = {
     if (!$('#pop-tpl').hidden) renderTemplates();
   },
   syncReady() {},
+};
+
+/* ---------- ログイン画面：許可したアカウントでログインするまで、ノートを見せない ----------
+   本当の守りは Firestore のルール（同じアカウントだけ読み書きできる）。こちらは画面の鍵 */
+const ALLOWED_EMAILS = ['yuuyuunosabu6250@gmail.com', 'muratasensor@gmail.com'];
+const isAllowed = u => !!u && u.emailVerified !== false && ALLOWED_EMAILS.includes((u.email || '').toLowerCase());
+const locked = () => !$('#gate').hidden;
+const GATE_MSG = {
+  checking: '確認中…',
+  out: 'ログインしてください',
+  denied: email => `${email} では使えません。`,
+  error: 'ログインの準備ができませんでした。ネットにつないでから開き直してください。',
+};
+function setGate(state, email = '') {
+  const m = GATE_MSG[state];
+  $('#gate').hidden = state === 'ok';
+  $('#gate-msg').textContent = typeof m === 'function' ? m(email) : m || '';
+  $('#gate-login').hidden = !(state === 'out' || state === 'denied');
+  $('#gate-login').textContent = state === 'denied' ? '別のアカウントでログイン' : 'Google でログイン';
+  if (state !== 'ok') { closePops(); closeDrawer(); }
+}
+$('#gate-login').onclick = async () => {
+  try {
+    if (window.Sync.currentUser()) await window.Sync.signOut(); // 許可していないアカウントから切り替える
+    await window.Sync.signIn();
+  } catch (err) { toast('ログインできませんでした: ' + err.message); }
 };
 
 $('#sync').onclick = e => {
@@ -2512,7 +2545,7 @@ $('#sync').onclick = e => {
 $('#sync-now').onclick = () => { closePops(); window.Sync?.syncNow(); };
 $('#sync-out').onclick = () => {
   closePops();
-  if (confirm('ログアウトしますか？この端末のノートはそのまま残ります。')) window.Sync?.signOut();
+  if (confirm('ログアウトしますか？ログイン画面に戻ります（この端末のノートは残ります）。')) window.Sync?.signOut();
 };
 
 /* =========================================================
@@ -2528,12 +2561,15 @@ resize();
 // 同期の仕組みを読み込む。読み込めなかったら（オフラインなど）、つながったときにもう一度
 let syncTries = 0;
 function startSync() {
-  if (!window.FIREBASE_CONFIG || window.Sync) return;
+  if (!window.FIREBASE_CONFIG) { setGate('error'); return; }
+  if (window.Sync) return;
+  if (locked()) setGate('checking');
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=35' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=36' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
+      if (locked()) setGate('error');
       App.setSyncStatus(navigator.onLine ? 'error' : 'offline', '同期を開始できませんでした（' + err.message + '）');
       window.addEventListener('online', startSync, { once: true });
     });

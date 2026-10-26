@@ -1,9 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 自分のデータだけ読み書きできる
+    // 許可したアカウントが、自分のデータだけ読み書きできる（app.js の ALLOWED_EMAILS と合わせる）
     match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read, write: if request.auth != null && request.auth.uid == uid
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in ['yuuyuunosabu6250@gmail.com', 'muratasensor@gmail.com'];
     }
   }
 }
