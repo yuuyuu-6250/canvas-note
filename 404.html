@@ -2,6 +2,15 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<script>
+  // 存在しない URL ならどの階層でもこのページが出るので、画像・CSS・リンクの基準をサイトの一番上にする
+  // （GitHub Pages のプロジェクトサイト：/リポジトリ名/。それ以外は /）
+  (() => {
+    const seg = location.pathname.split('/')[1];
+    const base = location.hostname.endsWith('.github.io') && seg ? `/${seg}/` : '/';
+    document.write(`<base href="${base}">`);
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f6f7f9">
 <title>404 Not Found - Canvas Note</title>
@@ -15,7 +24,7 @@
   } catch (e) {}
 </script>
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=40">
+<link rel="stylesheet" href="style.css?v=41">
 <style>
   /* ノート用の「スクロールさせない・文字を選ばせない」設定を、ふつうのページ用に戻す */
   html { height: auto; overflow-y: auto; }

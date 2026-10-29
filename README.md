@@ -92,7 +92,7 @@ window.ALLOWED_EMAILS = ['you@gmail.com'];
 - `index.html` と `changelog.html` の `?v=数字` をすべて同じ数字に上げる
 - `app.js` の中の `sync.js?v=数字` も同じ数字にする
 - `changelog.html` の先頭に `vXX: 変更内容` を 1 行足し、「現在 vXX」を更新する
-- 自分で足したページ（`page-template.html` から作ったもの）の `style.css?v=数字` も同じ数字にする
+- 自分で足したページ（`page-template.html` から作ったもの）やエラーページ（`403.html` など）の `style.css?v=数字` も同じ数字にする
 
 ## 新しいページを作る
 
@@ -125,4 +125,5 @@ python tools/make_dist.py
 | `firestore.rules` | Firestore のセキュリティルール（Firebase コンソールに貼る） |
 | `changelog.html` | 変更履歴 |
 | `page-template.html` | 新しいページを作るときの雛形 |
+| `403.html` `404.html` `418.html`、`pict/` | エラーページ（404 は存在しない URL のときに GitHub Pages が自動で出す） |
 | `tools/make_dist.py` | 配布用 zip を作る |
