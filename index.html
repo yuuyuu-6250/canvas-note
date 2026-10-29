@@ -13,12 +13,13 @@
     const t = JSON.parse(localStorage.getItem('theme') || '"auto"');
     const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.querySelector('meta[name="theme-color"]').content = dark ? '#1b1c20' : '#f6f7f9'; // 上のバーの色
   } catch (e) {}
 </script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon.svg">
-<link rel="stylesheet" href="style.css?v=38">
+<link rel="stylesheet" href="style.css?v=39">
 </head>
 <body>
 <!-- ログイン画面（許可したアカウントでログインするまで、ノートを見せない） -->
@@ -189,8 +190,8 @@
 </div>
 
 <!-- 更新したら v= の数字を上げる（古いファイルがキャッシュに残らないように） -->
-<script src="firebase-config.js?v=38"></script>
-<script src="ruler.js?v=38"></script>
-<script src="app.js?v=38"></script>
+<script src="firebase-config.js?v=39"></script>
+<script src="ruler.js?v=39"></script>
+<script src="app.js?v=39"></script>
 </body>
 </html>
