@@ -92,6 +92,11 @@ window.ALLOWED_EMAILS = ['you@gmail.com'];
 - `index.html` と `changelog.html` の `?v=数字` をすべて同じ数字に上げる
 - `app.js` の中の `sync.js?v=数字` も同じ数字にする
 - `changelog.html` の先頭に `vXX: 変更内容` を 1 行足し、「現在 vXX」を更新する
+- 自分で足したページ（`page-template.html` から作ったもの）の `style.css?v=数字` も同じ数字にする
+
+## 新しいページを作る
+
+`page-template.html` をコピーして名前を変え（例：`help.html`）、中身を書き換えます。ノートと同じ色・角丸・ダークモードがそのまま使え、ボタン・カード・切り替え・入力欄・リストの見本が入っています。要らない見本は消してください。ノートからリンクするときは、`index.html` の「…」メニューの一番下にある「変更履歴」リンクの並びに足すと目立ちません。
 
 ## 使用量の目安（Firebase 無料プラン）
 
@@ -119,4 +124,5 @@ python tools/make_dist.py
 | `firebase-config.js` | Firebase の設定と、クラウドに保存してよいアカウント |
 | `firestore.rules` | Firestore のセキュリティルール（Firebase コンソールに貼る） |
 | `changelog.html` | 変更履歴 |
+| `page-template.html` | 新しいページを作るときの雛形 |
 | `tools/make_dist.py` | 配布用 zip を作る |

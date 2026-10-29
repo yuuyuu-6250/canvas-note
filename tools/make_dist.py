@@ -11,7 +11,7 @@ OUT = ROOT / 'dist' / 'canvas-note.zip'
 
 # そのまま入れるファイル
 FILES = [
-    'index.html', 'changelog.html', 'app.js', 'sync.js', 'ruler.js', 'style.css',
+    'index.html', 'changelog.html', 'page-template.html', 'app.js', 'sync.js', 'ruler.js', 'style.css',
     'sw.js', 'manifest.webmanifest', 'icon.svg', 'README.md',
 ]
 

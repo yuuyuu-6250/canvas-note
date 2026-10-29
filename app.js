@@ -2564,7 +2564,7 @@ function startSync() {
   if (window.Sync) return;
   if (locked()) setGate('checking');
   App.setSyncStatus(navigator.onLine ? 'syncing' : 'offline');
-  const url = './sync.js?v=39' + (syncTries++ ? '&r=' + syncTries : '');
+  const url = './sync.js?v=40' + (syncTries++ ? '&r=' + syncTries : '');
   return import(url)
     .then(() => swCacheNow())
     .catch(err => {
