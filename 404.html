@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f7f9">
+<title>404 Not Found - Canvas Note</title>
+<script>
+  // ノートと同じテーマ（ライト／ダーク）を、表示する前に決める
+  try {
+    const t = JSON.parse(localStorage.getItem('theme') || '"auto"');
+    const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.querySelector('meta[name="theme-color"]').content = dark ? '#1b1c20' : '#f6f7f9';
+  } catch (e) {}
+</script>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=40">
+<style>
+  /* ノート用の「スクロールさせない・文字を選ばせない」設定を、ふつうのページ用に戻す */
+  html { height: auto; overflow-y: auto; }
+  body { height: auto; overflow: visible; overscroll-behavior: auto; -webkit-user-select: text; user-select: text; touch-action: pan-y; }
+
+  main { max-width: 640px; margin: 0 auto; padding: calc(24px + var(--safe-t)) 16px calc(40px + var(--safe-b)); }
+  .back { display: inline-block; margin-bottom: 16px; color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="./">← ノートに戻る</a>
+  <img src="pict/404.png" alt="404 Not Found" style="width: 100%; max-width: 400px; margin: 20px auto; display: block;">
+</main>
+</body>
+</html>
